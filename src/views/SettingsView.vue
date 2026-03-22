@@ -149,6 +149,12 @@ onMounted(async () => {
         <span class="toggle-label">{{ advancedMaterial ? '已开启' : '已关闭' }}</span>
       </div>
     </div>
+    
+    <div class="about-section">
+      <div class="about-title">Sound Link</div>
+      <div class="about-version">v1.0.0</div>
+      <div class="about-desc">快速切换音频输出设备</div>
+    </div>
   </div>
 </template>
 
@@ -160,6 +166,8 @@ onMounted(async () => {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   color: var(--text-color);
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
 }
 
 .header {
@@ -346,6 +354,31 @@ h2 {
 
 .toggle-label {
   font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.about-section {
+  margin-top: auto;
+  padding-top: 16px;
+  text-align: center;
+  border-top: 1px solid var(--glass-border);
+}
+
+.about-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-color);
+  margin-bottom: 4px;
+}
+
+.about-version {
+  font-size: 11px;
+  color: var(--theme-color);
+  margin-bottom: 4px;
+}
+
+.about-desc {
+  font-size: 10px;
   color: var(--text-secondary);
 }
 </style>
