@@ -15,9 +15,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-permissions:
-  contents: write
-
 jobs:
   build:
     strategy:
@@ -61,7 +58,7 @@ jobs:
         run: npm install
 
       - name: Build the app
-        uses: tauri-apps/tauri-action@v0.5.17
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
