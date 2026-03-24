@@ -152,7 +152,7 @@ onMounted(async () => {
     
     <div class="about-section">
       <div class="about-title">Sound Link</div>
-      <div class="about-version">v0.1.0</div>
+      <div class="about-version">v0.1.1</div>
       <div class="about-desc">快速切换音频输出设备</div>
       <div class="about-links">
         <a href="https://github.com/CmzYa/sound_link" class="about-link" target="_blank">
