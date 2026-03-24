@@ -12,59 +12,102 @@ on:
         default: 'v0.1.0'
         type: string
 
-env:
-  CARGO_TERM_COLOR: always
+permissions:
+  contents: write
 
 jobs:
-  build:
+  validate-tag:
+    name: 校验 Tag 来源并提取版本
+    runs-on: ubuntu-22.04
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 校验 Tag 指向 main 分支提交
+        run: |
+          set -euo pipefail
+          git fetch origin main --no-tags
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "❌ 当前 tag (${GITHUB_REF_NAME}) 对应提交不在 main 分支上"
+            exit 1
+          fi
+          echo "✅ Tag 来源校验通过"
+
+      - name: 提取版本信息
+        id: meta
+        run: |
+          set -euo pipefail
+          TAG="${{ github.event.inputs.version || github.ref_name }}"
+          VERSION="$(echo "$TAG" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n 1)"
+          if [ -z "$VERSION" ]; then
+            echo "❌ 无法从 tag 提取版本号: $TAG"
+            exit 1
+          fi
+
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "✅ 发布版本: $VERSION"
+
+  build-windows:
+    name: 构建 Windows 版本
+    needs: validate-tag
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: 'windows-latest'
             args: ''
-            target: ''
-          - platform: 'macos-latest'
-            args: '--target universal-apple-darwin'
-            target: 'aarch64-apple-darwin,x86_64-apple-darwin'
+            arch: 'amd64'
+          - platform: 'windows-11-arm'
+            args: ''
+            arch: 'arm64'
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - name: Checkout repository
+      - name: 检出代码
         uses: actions/checkout@v4
 
-      - name: Install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - name: Setup Node
+      - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "lts/*"
 
-      - name: Install Rust stable
+      - name: 安装 Rust 工具链
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
 
-      - name: Rust cache
+      - name: 缓存 Rust 编译产物
         uses: swatinem/rust-cache@v2
         with:
-          workspaces: './src-tauri -> target'
+          workspaces: "./src-tauri -> target"
 
-      - name: Install frontend dependencies
+      - name: 安装前端依赖
         run: npm install
 
-      - name: Build the app
+      - name: 构建并发布
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.event.inputs.version || github.ref_name }}
-          releaseName: 'Sound Link ${{ github.event.inputs.version || github.ref_name }}'
-          releaseBody: 'See the assets to download and install this version.'
+          tagName: ${{ needs.validate-tag.outputs.tag }}
+          releaseName: "Sound Link v${{ needs.validate-tag.outputs.version }}"
+          releaseBody: |
+            ## 发布 Sound Link v${{ needs.validate-tag.outputs.version }}
+            
+            ### 下载说明
+            - **Windows x64**: 下载 `.msi` 或 `.exe` 文件
+            - **Windows ARM64**: 下载对应的安装包
+            
+            ### 功能特点
+            - 可视化显示系统音频设备
+            - 一键切换音频输出设备
+            - 跟随系统主题（深色/浅色模式）
+            - 跟随系统主题色
+            - 高级毛玻璃材质效果
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
