@@ -5,7 +5,8 @@ import {
   Headphones, 
   Monitor, 
   Bluetooth,
-  Volume2 
+  Volume2,
+  Loader2
 } from "lucide-vue-next";
 
 const props = defineProps({
@@ -14,6 +15,10 @@ const props = defineProps({
     required: true
   },
   isActive: {
+    type: Boolean,
+    default: false
+  },
+  isLoading: {
     type: Boolean,
     default: false
   },
@@ -30,6 +35,7 @@ const props = defineProps({
 const emit = defineEmits(["click"]);
 
 const deviceIcon = computed(() => {
+  if (props.isLoading) return Loader2;
   const deviceType = props.device.type || props.device.device_type;
   switch (deviceType) {
     case "speakers": return Speaker;
@@ -47,21 +53,26 @@ const truncatedName = computed(() => {
 });
 
 function handleClick() {
-  emit("click", props.device);
+  if (!props.isLoading) {
+    emit("click", props.device);
+  }
 }
 </script>
 
 <template>
   <div
     class="device-ball"
-    :class="[isActive ? 'snapped' : 'unsnapped', { 'advanced-material': advancedMaterial }]"
+    :class="[
+      isActive ? 'snapped' : 'unsnapped', 
+      { 'advanced-material': advancedMaterial, 'is-loading': isLoading }
+    ]"
     :style="{
       left: `${position.x}px`,
       top: `${position.y}px`
     }"
     @click="handleClick"
   >
-    <component :is="deviceIcon" :size="18" class="icon" />
+    <component :is="deviceIcon" :size="18" class="icon" :class="{ 'spin': isLoading }" />
     <span class="name">{{ truncatedName }}</span>
   </div>
 </template>
@@ -81,12 +92,25 @@ function handleClick() {
   transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
-.device-ball:hover {
+.device-ball:hover:not(.is-loading) {
   transform: scale(1.1);
 }
 
-.device-ball:active {
+.device-ball:active:not(.is-loading) {
   transform: scale(0.95);
+}
+
+.device-ball.is-loading {
+  cursor: wait;
+}
+
+.icon.spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 /* 深色模式 - 激活状态 */

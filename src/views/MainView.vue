@@ -11,6 +11,7 @@ const BALL_SIZE = 44;
 const UNSNAP_RADIUS = 85;
 const SNAP_RADIUS = 55;
 const CONTAINER_SIZE = 280;
+const CACHE_EXPIRE_SECONDS = 30;
 
 const allDevices = shallowRef([]);
 const activeDeviceId = ref(null);
@@ -18,6 +19,7 @@ const configDefaultDeviceId = ref(null);
 const showSettings = ref(false);
 const advancedMaterial = ref(false);
 const isReady = ref(false);
+const switchingDeviceId = ref(null);
 
 function handleSettingsClose() {
   showSettings.value = false;
@@ -46,17 +48,27 @@ const devicePositions = computed(() => {
   });
 });
 
+function applyData(data) {
+  allDevices.value = data.devices;
+  activeDeviceId.value = data.default_device_id;
+  configDefaultDeviceId.value = data.config.default_device_id;
+  advancedMaterial.value = data.config.advanced_material || false;
+  
+  if (activeDeviceId.value === configDefaultDeviceId.value) {
+    activeDeviceId.value = null;
+  }
+}
+
+function isCacheExpired(timestamp) {
+  if (!timestamp) return true;
+  const now = Math.floor(Date.now() / 1000);
+  return (now - timestamp) > CACHE_EXPIRE_SECONDS;
+}
+
 async function refreshDevices() {
   try {
     const data = await invoke("get_initial_data");
-    allDevices.value = data.devices;
-    activeDeviceId.value = data.default_device_id;
-    configDefaultDeviceId.value = data.config.default_device_id;
-    advancedMaterial.value = data.config.advanced_material || false;
-    
-    if (activeDeviceId.value === configDefaultDeviceId.value) {
-      activeDeviceId.value = null;
-    }
+    applyData(data);
   } catch (e) {
     console.error("Failed to load data:", e);
     allDevices.value = [];
@@ -64,28 +76,49 @@ async function refreshDevices() {
   }
 }
 
-async function handleDeviceClick(device) {
-  const previousDeviceId = activeDeviceId.value;
-  
-  if (device.id === activeDeviceId.value) {
-    activeDeviceId.value = null;
-    if (configDefaultDeviceId.value) {
-      invoke("set_default_device", { deviceId: configDefaultDeviceId.value }).catch(e => {
-        console.error("Failed to set default device:", e);
-        activeDeviceId.value = previousDeviceId;
-      });
+async function loadCachedOrRefresh() {
+  try {
+    const cached = await invoke("get_cached_data");
+    if (cached && !isCacheExpired(cached.timestamp)) {
+      applyData(cached);
+    } else {
+      await refreshDevices();
     }
-  } else {
-    activeDeviceId.value = device.id;
-    invoke("set_default_device", { deviceId: device.id }).catch(e => {
-      console.error("Failed to set device:", e);
-      activeDeviceId.value = previousDeviceId;
-    });
+  } catch (e) {
+    console.error("Failed to load cached data:", e);
+    await refreshDevices();
+  }
+}
+
+async function handleDeviceClick(device) {
+  if (switchingDeviceId.value) return;
+  
+  const previousDeviceId = activeDeviceId.value;
+  switchingDeviceId.value = device.id;
+  
+  try {
+    if (device.id === activeDeviceId.value) {
+      // 未设置默认设备时，禁止取消选择
+      if (!configDefaultDeviceId.value) {
+        return;
+      }
+      activeDeviceId.value = null;
+      await invoke("set_default_device", { deviceId: configDefaultDeviceId.value });
+    } else {
+      activeDeviceId.value = device.id;
+      await invoke("set_default_device", { deviceId: device.id });
+    }
+  } catch (e) {
+    console.error("Failed to set device:", e);
+    activeDeviceId.value = previousDeviceId;
+  } finally {
+    switchingDeviceId.value = null;
   }
 }
 
 async function hideWindow() {
   try {
+    await invoke("refresh_and_cache");
     await invoke("hide_window");
   } catch (e) {
     console.error("Failed to hide window:", e);
@@ -165,13 +198,11 @@ let unlisten = null;
 let unlistenSettings = null;
 
 onMounted(async () => {
-  // 并行执行初始化操作，减少等待时间
   const [, themeResult] = await Promise.allSettled([
-    refreshDevices(),
+    loadCachedOrRefresh(),
     setupThemeListener()
   ]);
   
-  // 设置就绪状态，允许用户交互
   isReady.value = true;
   
   unlisten = await listen("refresh-devices", async () => {
@@ -221,6 +252,7 @@ onUnmounted(() => {
           :key="device.id"
           :device="device"
           :is-active="device.id === activeDeviceId"
+          :is-loading="device.id === switchingDeviceId"
           :position="devicePositions[index]"
           :advanced-material="advancedMaterial"
           @click="handleDeviceClick(device)"

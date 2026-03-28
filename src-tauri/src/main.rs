@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -24,6 +25,7 @@ struct AppConfig {
 struct AppState {
     config: Mutex<AppConfig>,
     audio_manager: Mutex<AudioDeviceManager>,
+    cached_data: Mutex<Option<InitialData>>,
 }
 
 fn get_config_path() -> PathBuf {
@@ -74,11 +76,19 @@ fn set_default_device(device_id: String, state: tauri::State<AppState>) -> Resul
     manager.set_default(&device_id)
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 struct InitialData {
     devices: Vec<Device>,
     default_device_id: Option<String>,
     config: AppConfig,
+    timestamp: u64,
+}
+
+fn get_current_timestamp() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[tauri::command]
@@ -92,7 +102,31 @@ fn get_initial_data(state: tauri::State<AppState>) -> InitialData {
         devices,
         default_device_id,
         config,
+        timestamp: get_current_timestamp(),
     }
+}
+
+#[tauri::command]
+fn get_cached_data(state: tauri::State<AppState>) -> Option<InitialData> {
+    state.cached_data.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn refresh_and_cache(state: tauri::State<AppState>) -> InitialData {
+    let manager = state.audio_manager.lock().unwrap();
+    let devices = manager.get_devices();
+    let default_device_id = manager.get_default();
+    let config = state.config.lock().unwrap().clone();
+    
+    let data = InitialData {
+        devices,
+        default_device_id,
+        config,
+        timestamp: get_current_timestamp(),
+    };
+    
+    *state.cached_data.lock().unwrap() = Some(data.clone());
+    data
 }
 
 #[tauri::command]
@@ -383,9 +417,12 @@ fn main() {
         .manage(AppState {
             config: Mutex::new(config),
             audio_manager: Mutex::new(AudioDeviceManager::new()),
+            cached_data: Mutex::new(None),
         })
         .invoke_handler(tauri::generate_handler![
             get_initial_data,
+            get_cached_data,
+            refresh_and_cache,
             get_audio_devices,
             get_default_device,
             set_default_device,
