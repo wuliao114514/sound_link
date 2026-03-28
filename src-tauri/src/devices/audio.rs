@@ -11,7 +11,48 @@ pub struct AudioDeviceManager;
 
 impl AudioDeviceManager {
     pub fn new() -> Self {
+        Self::ensure_module_installed();
         Self
+    }
+
+    fn ensure_module_installed() {
+        if !Self::is_module_installed() {
+            Self::install_module();
+        }
+    }
+
+    fn is_module_installed() -> bool {
+        let mut cmd = Command::new("powershell");
+        cmd.args([
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-Command",
+            "Get-Module -ListAvailable -Name AudioDeviceCmdlets | Select-Object -First 1"
+        ]);
+
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        if let Ok(output) = cmd.output() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            return stdout.contains("AudioDeviceCmdlets");
+        }
+        false
+    }
+
+    fn install_module() {
+        let mut cmd = Command::new("powershell");
+        cmd.args([
+            "-NoProfile",
+            "-ExecutionPolicy", "Bypass",
+            "-Command",
+            "Install-Module -Name AudioDeviceCmdlets -Force -Scope CurrentUser"
+        ]);
+
+        #[cfg(windows)]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let _ = cmd.output();
     }
 }
 
