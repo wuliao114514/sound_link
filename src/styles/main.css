@@ -2,9 +2,9 @@
   --theme-color: #0078d4;
   --theme-glow: rgba(0, 120, 212, 0.4);
   --glass-border: rgba(255, 255, 255, 0.08);
-  --glass-bg: rgba(28, 28, 32, 0.75);
-  --glass-blur: 20px;
-  --glass-saturation: 180%;
+  --glass-bg: rgba(28, 28, 32, 0.92);
+  --glass-blur: 12px;
+  --glass-saturation: 150%;
   --acrylic-noise-opacity: 0.02;
   --text-color: rgba(255, 255, 255, 0.9);
   --text-secondary: rgba(255, 255, 255, 0.6);
@@ -71,11 +71,11 @@ body {
 /* 深色模式 - 高级材质 */
 #app.advanced-material::before {
   background: linear-gradient(145deg, 
-    rgba(255, 255, 255, 0.08), 
-    rgba(255, 255, 255, 0.02)
+    rgba(45, 45, 52, 0.98), 
+    rgba(35, 35, 42, 0.98)
   );
-  backdrop-filter: blur(35px) saturate(220%);
-  -webkit-backdrop-filter: blur(35px) saturate(220%);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
 }
 
 #app.advanced-material::after {
@@ -94,11 +94,11 @@ body {
 /* 浅色模式 - 高级材质 */
 [data-theme="light"] #app.advanced-material::before {
   background: linear-gradient(145deg, 
-    rgba(255, 255, 255, 0.55), 
-    rgba(255, 255, 255, 0.35)
+    rgba(255, 255, 255, 0.98), 
+    rgba(245, 245, 250, 0.98)
   );
-  backdrop-filter: blur(35px) saturate(220%);
-  -webkit-backdrop-filter: blur(35px) saturate(220%);
+  backdrop-filter: blur(16px) saturate(180%);
+  -webkit-backdrop-filter: blur(16px) saturate(180%);
 }
 
 [data-theme="light"] #app.advanced-material::after {

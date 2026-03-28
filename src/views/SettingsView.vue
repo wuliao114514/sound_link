@@ -198,8 +198,6 @@ onMounted(async () => {
   align-items: center;
   justify-content: center;
   transition: all 0.2s;
-  backdrop-filter: blur(10px) saturate(180%);
-  -webkit-backdrop-filter: blur(10px) saturate(180%);
   border: 1px solid var(--glass-border);
 }
 
@@ -246,8 +244,6 @@ h2 {
   border-radius: 8px;
   cursor: pointer;
   transition: all 0.2s;
-  backdrop-filter: blur(10px) saturate(180%);
-  -webkit-backdrop-filter: blur(10px) saturate(180%);
 }
 
 .dropdown-trigger:hover {
@@ -287,8 +283,6 @@ h2 {
   max-height: 180px;
   overflow-y: auto;
   z-index: 10;
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
 }
 

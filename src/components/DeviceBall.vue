@@ -61,9 +61,7 @@ function handleClick() {
     }"
     @click="handleClick"
   >
-    <div class="ball-inner">
-      <component :is="deviceIcon" :size="18" class="icon" />
-    </div>
+    <component :is="deviceIcon" :size="18" class="icon" />
     <span class="name">{{ truncatedName }}</span>
   </div>
 </template>
@@ -75,14 +73,12 @@ function handleClick() {
   height: 44px;
   border-radius: 50%;
   display: flex;
-  flex-direction: column;
   align-items: center;
   justify-content: center;
+  z-index: 50;
+  overflow: visible;
   cursor: pointer;
-  z-index: 5;
-  transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-  will-change: transform;
-  transform: translateZ(0);
+  transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
 }
 
 .device-ball:hover {
@@ -93,43 +89,32 @@ function handleClick() {
   transform: scale(0.95);
 }
 
-.ball-inner {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: all 0.25s ease;
-}
-
 /* 深色模式 - 激活状态 */
-.device-ball.snapped .ball-inner {
+.device-ball.snapped {
   background: linear-gradient(145deg, 
     var(--theme-color), 
     color-mix(in srgb, var(--theme-color) 65%, black)
   );
   box-shadow: 
     0 4px 16px rgba(0, 0, 0, 0.4),
-    0 0 20px var(--theme-glow),
+    0 0 12px var(--theme-glow),
+    0 0 24px var(--theme-glow),
     inset 0 1px 0 rgba(255, 255, 255, 0.15);
 }
 
 /* 深色模式 - 未激活状态 */
-.device-ball.unsnapped .ball-inner {
+.device-ball.unsnapped {
   background: linear-gradient(145deg, 
-    rgba(255, 255, 255, 0.1), 
-    rgba(255, 255, 255, 0.05)
+    rgba(60, 60, 70, 0.95), 
+    rgba(45, 45, 55, 0.95)
   );
   border: 1px solid rgba(255, 255, 255, 0.12);
   box-shadow: 
     0 2px 8px rgba(0, 0, 0, 0.25),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(12px) saturate(180%);
-  -webkit-backdrop-filter: blur(12px) saturate(180%);
 }
 
-.device-ball.unsnapped:hover .ball-inner {
+.device-ball.unsnapped:hover {
   background: linear-gradient(145deg, 
     rgba(255, 255, 255, 0.15), 
     rgba(255, 255, 255, 0.08)
@@ -161,13 +146,8 @@ function handleClick() {
   text-overflow: ellipsis;
 }
 
-/* 激活动画 */
-.device-ball.snapped {
-  animation: glow-pulse 2s ease-in-out infinite;
-}
-
 /* 深色模式 - 高级材质激活状态 */
-.device-ball.snapped.advanced-material .ball-inner {
+.device-ball.snapped.advanced-material {
   background: linear-gradient(145deg, 
     color-mix(in srgb, var(--theme-color) 65%, white), 
     color-mix(in srgb, var(--theme-color) 40%, rgba(255, 255, 255, 0.2))
@@ -182,20 +162,18 @@ function handleClick() {
 }
 
 /* 深色模式 - 高级材质未激活状态 */
-.device-ball.unsnapped.advanced-material .ball-inner {
+.device-ball.unsnapped.advanced-material {
   background: linear-gradient(145deg, 
-    rgba(255, 255, 255, 0.18), 
-    rgba(255, 255, 255, 0.08)
+    rgba(70, 70, 80, 0.98), 
+    rgba(50, 50, 60, 0.98)
   );
   border: 1px solid rgba(255, 255, 255, 0.18);
-  backdrop-filter: blur(20px) saturate(200%);
-  -webkit-backdrop-filter: blur(20px) saturate(200%);
   box-shadow: 
     0 4px 20px rgba(0, 0, 0, 0.2),
     inset 0 1px 0 rgba(255, 255, 255, 0.25);
 }
 
-.device-ball.unsnapped.advanced-material:hover .ball-inner {
+.device-ball.unsnapped.advanced-material:hover {
   background: linear-gradient(145deg, 
     rgba(255, 255, 255, 0.25), 
     rgba(255, 255, 255, 0.12)
@@ -209,7 +187,7 @@ function handleClick() {
 /* ========== 浅色模式 ========== */
 
 /* 浅色模式 - 未激活状态 */
-[data-theme="light"] .device-ball.unsnapped .ball-inner {
+[data-theme="light"] .device-ball.unsnapped {
   background: linear-gradient(145deg, 
     rgba(255, 255, 255, 0.95), 
     rgba(255, 255, 255, 0.85)
@@ -220,7 +198,7 @@ function handleClick() {
     inset 0 1px 0 rgba(255, 255, 255, 1);
 }
 
-[data-theme="light"] .device-ball.unsnapped:hover .ball-inner {
+[data-theme="light"] .device-ball.unsnapped:hover {
   background: linear-gradient(145deg, 
     rgba(255, 255, 255, 1), 
     rgba(255, 255, 255, 0.95)
@@ -232,19 +210,20 @@ function handleClick() {
 }
 
 /* 浅色模式 - 激活状态 */
-[data-theme="light"] .device-ball.snapped .ball-inner {
+[data-theme="light"] .device-ball.snapped {
   background: linear-gradient(145deg, 
     var(--theme-color), 
     color-mix(in srgb, var(--theme-color) 75%, white)
   );
   box-shadow: 
     0 4px 16px rgba(0, 0, 0, 0.15),
-    0 0 20px var(--theme-glow),
+    0 0 12px var(--theme-glow),
+    0 0 24px var(--theme-glow),
     inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 
 /* 浅色模式 - 高级材质未激活状态 */
-[data-theme="light"] .device-ball.unsnapped.advanced-material .ball-inner {
+[data-theme="light"] .device-ball.unsnapped.advanced-material {
   background: linear-gradient(145deg, 
     rgba(255, 255, 255, 0.98), 
     rgba(255, 255, 255, 0.92)
@@ -255,7 +234,7 @@ function handleClick() {
     inset 0 2px 0 rgba(255, 255, 255, 1);
 }
 
-[data-theme="light"] .device-ball.unsnapped.advanced-material:hover .ball-inner {
+[data-theme="light"] .device-ball.unsnapped.advanced-material:hover {
   background: linear-gradient(145deg, 
     rgba(255, 255, 255, 1), 
     rgba(255, 255, 255, 0.98)
@@ -267,7 +246,7 @@ function handleClick() {
 }
 
 /* 浅色模式 - 高级材质激活状态 */
-[data-theme="light"] .device-ball.snapped.advanced-material .ball-inner {
+[data-theme="light"] .device-ball.snapped.advanced-material {
   background: linear-gradient(145deg, 
     color-mix(in srgb, var(--theme-color) 85%, white), 
     color-mix(in srgb, var(--theme-color) 65%, white)
@@ -293,14 +272,5 @@ function handleClick() {
 /* 浅色模式 - 名称 */
 [data-theme="light"] .device-ball .name {
   text-shadow: 0 1px 3px rgba(255, 255, 255, 0.9);
-}
-
-@keyframes glow-pulse {
-  0%, 100% {
-    filter: drop-shadow(0 0 8px var(--theme-glow));
-  }
-  50% {
-    filter: drop-shadow(0 0 16px var(--theme-glow));
-  }
 }
 </style>

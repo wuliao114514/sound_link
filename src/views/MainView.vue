@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from "vue";
+import { ref, onMounted, onUnmounted, computed, shallowRef } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -8,15 +8,16 @@ import DeviceBall from "../components/DeviceBall.vue";
 import SettingsView from "./SettingsView.vue";
 
 const BALL_SIZE = 44;
-const UNSNAP_RADIUS = 75;
-const SNAP_RADIUS = 53;
+const UNSNAP_RADIUS = 85;
+const SNAP_RADIUS = 55;
 const CONTAINER_SIZE = 280;
 
-const allDevices = ref([]);
+const allDevices = shallowRef([]);
 const activeDeviceId = ref(null);
 const configDefaultDeviceId = ref(null);
 const showSettings = ref(false);
 const advancedMaterial = ref(false);
+const isReady = ref(false);
 
 function handleSettingsClose() {
   showSettings.value = false;
@@ -164,8 +165,14 @@ let unlisten = null;
 let unlistenSettings = null;
 
 onMounted(async () => {
-  await refreshDevices();
-  await setupThemeListener();
+  // 并行执行初始化操作，减少等待时间
+  const [, themeResult] = await Promise.allSettled([
+    refreshDevices(),
+    setupThemeListener()
+  ]);
+  
+  // 设置就绪状态，允许用户交互
+  isReady.value = true;
   
   unlisten = await listen("refresh-devices", async () => {
     await refreshDevices();
@@ -190,7 +197,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div id="app" :class="{ 'advanced-material': advancedMaterial }" @click="handleAppClick">
+  <div id="app" :class="{ 'advanced-material': advancedMaterial, 'is-ready': isReady }" @click="handleAppClick">
     <button v-if="!showSettings" class="settings-btn" @click.stop="showSettings = !showSettings">
       <Settings :size="16" />
     </button>
@@ -228,6 +235,17 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+#app {
+  pointer-events: none;
+  opacity: 0.95;
+}
+
+#app.is-ready {
+  pointer-events: auto;
+  opacity: 1;
+  transition: opacity 0.15s ease;
+}
+
 .container {
   position: relative;
   width: 280px;
@@ -270,6 +288,9 @@ onUnmounted(() => {
   height: 60px;
   z-index: 10;
   will-change: transform;
+  transform: translate3d(-50%, -50%, 0);
+  backface-visibility: hidden;
+  pointer-events: none;
 }
 
 .center-inner {
@@ -287,9 +308,8 @@ onUnmounted(() => {
     0 4px 20px rgba(0, 0, 0, 0.4),
     0 0 25px var(--theme-glow),
     inset 0 1px 0 rgba(255, 255, 255, 0.15);
-  animation: center-glow 3s ease-in-out infinite;
-  will-change: box-shadow;
-  transform: translateZ(0);
+  will-change: auto;
+  transform: translate3d(0, 0, 0);
 }
 
 /* 深色模式 - 高级材质中心球 */
@@ -297,8 +317,7 @@ onUnmounted(() => {
   position: relative;
 }
 
-.center-ball.advanced-material::before,
-.center-ball.advanced-material::after {
+.center-ball.advanced-material::before {
   content: '';
   position: absolute;
   top: 50%;
@@ -307,19 +326,10 @@ onUnmounted(() => {
   height: 100%;
   background: var(--theme-glow);
   border-radius: 50%;
-  transform: translate(-50%, -50%) scale(0);
-  opacity: 1;
+  transform: translate(-50%, -50%) scale(2);
+  opacity: 0.3;
   z-index: -1;
   filter: blur(10px);
-}
-
-.center-ball.advanced-material::before {
-  animation: light-wave 3s ease-out infinite;
-}
-
-.center-ball.advanced-material::after {
-  animation: light-wave 3s ease-out 1s infinite;
-  background: color-mix(in srgb, var(--theme-color) 40%, transparent);
 }
 
 .center-ball.advanced-material .center-inner {
@@ -328,59 +338,15 @@ onUnmounted(() => {
     color-mix(in srgb, var(--theme-color) 40%, rgba(255, 255, 255, 0.2))
   );
   border: 1px solid rgba(255, 255, 255, 0.25);
-  backdrop-filter: blur(20px) saturate(200%);
-  -webkit-backdrop-filter: blur(20px) saturate(200%);
   box-shadow: 
     0 8px 35px rgba(0, 0, 0, 0.3),
     inset 0 2px 0 rgba(255, 255, 255, 0.35),
     0 0 30px var(--theme-glow);
-  animation: center-glow-advanced 3s ease-in-out infinite;
 }
 
 .center-ball .icon {
   color: white;
   filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
-}
-
-@keyframes center-glow {
-  0%, 100% {
-    box-shadow: 
-      0 4px 20px rgba(0, 0, 0, 0.4),
-      0 0 25px var(--theme-glow),
-      inset 0 1px 0 rgba(255, 255, 255, 0.15);
-  }
-  50% {
-    box-shadow: 
-      0 6px 28px rgba(0, 0, 0, 0.5),
-      0 0 40px var(--theme-glow),
-      inset 0 1px 0 rgba(255, 255, 255, 0.2);
-  }
-}
-
-@keyframes center-glow-advanced {
-  0%, 100% {
-    box-shadow: 
-      0 8px 35px rgba(0, 0, 0, 0.3),
-      inset 0 2px 0 rgba(255, 255, 255, 0.35),
-      0 0 30px var(--theme-glow);
-  }
-  50% {
-    box-shadow: 
-      0 10px 45px rgba(0, 0, 0, 0.4),
-      inset 0 2px 0 rgba(255, 255, 255, 0.4),
-      0 0 50px var(--theme-glow);
-  }
-}
-
-@keyframes light-wave {
-  0% {
-    transform: translate(-50%, -50%) scale(0);
-    opacity: 0.9;
-  }
-  100% {
-    transform: translate(-50%, -50%) scale(3.5);
-    opacity: 0;
-  }
 }
 
 .no-device-hint {
