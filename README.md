@@ -122,7 +122,8 @@ sound-link/
 │   │   └── router/     # 音频路由模块
 │   │       ├── mod.rs  # 模块定义
 │   │       ├── router.rs # 路由核心逻辑
-│   │       └── delay_buffer.rs # 延迟缓冲
+│   │       ├── delay_buffer.rs # 延迟缓冲
+│   │       └── volume_mixer.rs # 音量混合
 │   ├── icons/          # 应用图标
 │   ├── capabilities/   # Tauri 权限配置
 │   └── tauri.conf.json # Tauri 配置
