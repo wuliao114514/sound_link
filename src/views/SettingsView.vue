@@ -31,7 +31,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(["close", "config-changed"]);
+const emit = defineEmits(["close", "config-changed", "device-settings-changed"]);
 
 const devices = ref([]);
 const selectedDeviceId = ref(null);
@@ -42,12 +42,31 @@ const isCheckingUpdate = ref(false);
 const updateInfo = ref(null);
 const isInitialized = ref(false);
 
+// 所有设备的音量和延迟配置
+const deviceVolumes = ref({});
+const deviceDelays = ref({});
+
 const GITHUB_REPO = "CmzYa/sound_link";
 const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
 
 const selectedDevice = computed(() => {
   return devices.value.find(d => d.id === selectedDeviceId.value);
 });
+
+// 过滤掉 Cable 设备
+const availableDevices = computed(() => {
+  return devices.value.filter(d => !d.name.toLowerCase().includes('cable'));
+});
+
+function getDeviceIcon(type) {
+  switch (type) {
+    case "speakers": return Speaker;
+    case "headphones": return Headphones;
+    case "hdmi": return Monitor;
+    case "bluetooth": return Bluetooth;
+    default: return Volume2;
+  }
+}
 
 async function loadDevices() {
   try {
@@ -80,13 +99,34 @@ async function saveConfig() {
   }
 }
 
-function getDeviceIcon(type) {
-  switch (type) {
-    case "speakers": return Speaker;
-    case "headphones": return Headphones;
-    case "hdmi": return Monitor;
-    case "bluetooth": return Bluetooth;
-    default: return Volume2;
+async function loadDeviceSettings() {
+  try {
+    const savedConfig = await invoke("get_saved_router_config");
+    if (savedConfig && savedConfig.devices) {
+      for (const device of savedConfig.devices) {
+        deviceVolumes.value[device.id] = device.volume;
+        deviceDelays.value[device.id] = device.delay_ms;
+      }
+    }
+  } catch (e) {
+    console.error("Failed to load device settings:", e);
+  }
+}
+
+async function saveDeviceSettings() {
+  try {
+    const config = {
+      devices: availableDevices.value.map(d => ({
+        id: d.id,
+        name: d.name,
+        volume: deviceVolumes.value[d.id] ?? 1.0,
+        delay_ms: deviceDelays.value[d.id] ?? 0,
+        enabled: true
+      }))
+    };
+    await invoke("save_router_config", { config });
+  } catch (e) {
+    console.error("Failed to save device settings:", e);
   }
 }
 
@@ -98,6 +138,30 @@ function selectDevice(deviceId) {
 function clearSelection() {
   selectedDeviceId.value = null;
   isDropdownOpen.value = false;
+}
+
+async function updateDeviceVolume(deviceId, volume) {
+  deviceVolumes.value[deviceId] = volume;
+  await saveDeviceSettings();
+  emit("device-settings-changed", { deviceId, volume, delayMs: deviceDelays.value[deviceId] });
+  // 如果正在广播，实时更新
+  try {
+    await invoke("set_router_device_volume", { deviceId, volume });
+  } catch (e) {
+    // 忽略错误（可能未在广播）
+  }
+}
+
+async function updateDeviceDelay(deviceId, delayMs) {
+  deviceDelays.value[deviceId] = delayMs;
+  await saveDeviceSettings();
+  emit("device-settings-changed", { deviceId, volume: deviceVolumes.value[deviceId], delayMs });
+  // 如果正在广播，实时更新
+  try {
+    await invoke("set_router_device_delay", { deviceId, delayMs });
+  } catch (e) {
+    // 忽略错误（可能未在广播）
+  }
 }
 
 watch(selectedDeviceId, () => {
@@ -140,10 +204,7 @@ async function checkForUpdate() {
     const latestVersion = release.tag_name.replace(/^v/, '');
     const currentVersion = props.appVersion || "0.0.0";
     
-    console.log("当前版本:", currentVersion, "最新版本:", latestVersion);
-    
     const comparison = compareVersions(currentVersion, latestVersion);
-    console.log("版本比较结果:", comparison);
     
     if (comparison > 0) {
       updateInfo.value = {
@@ -179,7 +240,6 @@ async function openReleasePage() {
 }
 
 onMounted(async () => {
-  // 使用 MainView 传入的初始数据，避免重复加载和视觉跳动
   if (props.initialDevices && props.initialDevices.length > 0) {
     devices.value = props.initialDevices;
   } else {
@@ -190,7 +250,6 @@ onMounted(async () => {
   selectedDeviceId.value = props.initialDefaultDeviceId;
   advancedMaterial.value = props.initialAdvancedMaterial;
   
-  // 如果 MainView 已检测到更新，直接显示
   if (props.hasUpdate && props.latestVersion) {
     updateInfo.value = {
       hasUpdate: true,
@@ -199,7 +258,7 @@ onMounted(async () => {
     };
   }
   
-  // 初始化完成后再启用 watch 监听
+  await loadDeviceSettings();
   isInitialized.value = true;
 });
 </script>
@@ -213,69 +272,115 @@ onMounted(async () => {
       <h2>设置</h2>
     </div>
     
-    <div class="setting-item">
-      <div class="setting-label">默认设备</div>
-      <p class="setting-hint">无连接时使用并在主窗口隐藏</p>
-      
-      <div class="dropdown">
-        <div class="dropdown-trigger" @click="isDropdownOpen = !isDropdownOpen">
-          <div class="dropdown-value">
-            <template v-if="selectedDevice">
-              <component :is="getDeviceIcon(selectedDevice.type)" :size="14" class="dropdown-icon" />
-              <span>{{ selectedDevice.name }}</span>
-            </template>
-            <span v-else class="placeholder">未选择</span>
-          </div>
-          <ChevronDown v-if="!isDropdownOpen" :size="16" class="chevron" />
-          <ChevronUp v-else :size="16" class="chevron" />
-        </div>
+    <div class="settings-scroll">
+      <div class="setting-item">
+        <div class="setting-label">默认设备</div>
+        <p class="setting-hint">无连接时使用并在主窗口隐藏</p>
         
-        <div v-if="isDropdownOpen" class="dropdown-menu">
-          <div
-            class="dropdown-item"
-            :class="{ selected: selectedDeviceId === null }"
-            @click="clearSelection"
-          >
-            <span class="placeholder">未选择</span>
-            <div v-if="selectedDeviceId === null" class="check">✓</div>
-          </div>
-          <div
-            v-for="device in devices"
-            :key="device.id"
-            class="dropdown-item"
-            :class="{ selected: selectedDeviceId === device.id }"
-            @click="selectDevice(device.id)"
-          >
-            <div class="item-content">
-              <component :is="getDeviceIcon(device.type)" :size="14" class="dropdown-icon" />
-              <span>{{ device.name }}</span>
+        <div class="dropdown">
+          <div class="dropdown-trigger" @click="isDropdownOpen = !isDropdownOpen">
+            <div class="dropdown-value">
+              <template v-if="selectedDevice">
+                <component :is="getDeviceIcon(selectedDevice.type)" :size="14" class="dropdown-icon" />
+                <span>{{ selectedDevice.name }}</span>
+              </template>
+              <span v-else class="placeholder">未选择</span>
             </div>
-            <div v-if="selectedDeviceId === device.id" class="check">✓</div>
+            <ChevronDown v-if="!isDropdownOpen" :size="16" class="chevron" />
+            <ChevronUp v-else :size="16" class="chevron" />
+          </div>
+          
+          <div v-if="isDropdownOpen" class="dropdown-menu">
+            <div
+              class="dropdown-item"
+              :class="{ selected: selectedDeviceId === null }"
+              @click="clearSelection"
+            >
+              <span class="placeholder">未选择</span>
+              <div v-if="selectedDeviceId === null" class="check">✓</div>
+            </div>
+            <div
+              v-for="device in devices"
+              :key="device.id"
+              class="dropdown-item"
+              :class="{ selected: selectedDeviceId === device.id }"
+              @click="selectDevice(device.id)"
+            >
+              <div class="item-content">
+                <component :is="getDeviceIcon(device.type)" :size="14" class="dropdown-icon" />
+                <span>{{ device.name }}</span>
+              </div>
+              <div v-if="selectedDeviceId === device.id" class="check">✓</div>
+            </div>
           </div>
         </div>
       </div>
-    </div>
-    
-    <div class="setting-item">
-      <div class="setting-label">高级材质</div>
-      <p class="setting-hint">启用毛玻璃效果和更丰富的视觉样式</p>
       
-      <div class="toggle-container">
-        <div 
-          class="toggle-switch" 
-          :class="{ active: advancedMaterial }"
-          @click="advancedMaterial = !advancedMaterial"
-        >
-          <div class="toggle-thumb"></div>
+      <div class="setting-item">
+        <div class="setting-label">设备音量与延迟</div>
+        <p class="setting-hint">设置广播时各设备的音量和延迟</p>
+        
+        <div class="device-list">
+          <div 
+            v-for="device in availableDevices" 
+            :key="device.id"
+            class="device-item"
+          >
+            <div class="device-header">
+              <component :is="getDeviceIcon(device.type)" :size="14" />
+              <span class="device-name">{{ device.name }}</span>
+            </div>
+            
+            <div class="device-settings">
+              <div class="setting-row">
+                <span class="row-label">音量</span>
+                <input 
+                  type="range" 
+                  min="0" 
+                  max="100" 
+                  :value="(deviceVolumes[device.id] ?? 1) * 100"
+                  @input="updateDeviceVolume(device.id, $event.target.value / 100)"
+                  class="slider"
+                >
+                <span class="row-value">{{ Math.round((deviceVolumes[device.id] ?? 1) * 100) }}%</span>
+              </div>
+              <div class="setting-row">
+                <span class="row-label">延迟</span>
+                <input 
+                  type="range" 
+                  min="0" 
+                  max="500" 
+                  :value="deviceDelays[device.id] ?? 0"
+                  @input="updateDeviceDelay(device.id, parseInt($event.target.value))"
+                  class="slider"
+                >
+                <span class="row-value">{{ deviceDelays[device.id] ?? 0 }}ms</span>
+              </div>
+            </div>
+          </div>
         </div>
-        <span class="toggle-label">{{ advancedMaterial ? '已开启' : '已关闭' }}</span>
+      </div>
+      
+      <div class="setting-item">
+        <div class="setting-label">高级材质</div>
+        <p class="setting-hint">启用毛玻璃效果和更丰富的视觉样式</p>
+        
+        <div class="toggle-container">
+          <div 
+            class="toggle-switch" 
+            :class="{ active: advancedMaterial }"
+            @click="advancedMaterial = !advancedMaterial"
+          >
+            <div class="toggle-thumb"></div>
+          </div>
+          <span class="toggle-label">{{ advancedMaterial ? '已开启' : '已关闭' }}</span>
+        </div>
       </div>
     </div>
     
     <div class="about-section">
       <div class="about-title">Sound Link</div>
       <div class="about-version">v{{ props.appVersion || '...' }}</div>
-      <div class="about-desc">快速切换音频输出设备</div>
       <div class="about-links">
         <a href="https://github.com/CmzYa/sound_link" class="about-link" target="_blank">
           <svg class="github-icon" viewBox="0 0 24 24" fill="currentColor">
@@ -296,10 +401,6 @@ onMounted(async () => {
           <span v-else>检查更新</span>
         </button>
       </div>
-      <div v-if="updateInfo?.hasUpdate" class="update-info">
-        发现新版本 v{{ updateInfo.latestVersion }}，点击按钮前往下载
-      </div>
-      <div class="about-license">GPL-3.0 License</div>
     </div>
   </div>
 </template>
@@ -311,7 +412,6 @@ onMounted(async () => {
   padding: 12px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   color: var(--text-color);
-  overflow-y: auto;
   display: flex;
   flex-direction: column;
 }
@@ -320,7 +420,8 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 .back-btn {
@@ -350,6 +451,12 @@ h2 {
   font-weight: 600;
 }
 
+.settings-scroll {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
 .setting-item {
   margin-bottom: 12px;
 }
@@ -363,7 +470,7 @@ h2 {
 .setting-hint {
   font-size: 11px;
   color: var(--text-secondary);
-  margin: 0 0 8px 0;
+  margin: 0 0 6px 0;
   line-height: 1.4;
 }
 
@@ -375,7 +482,7 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 8px 10px;
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: 8px;
@@ -417,7 +524,7 @@ h2 {
   background: var(--glass-bg);
   border: 1px solid var(--glass-border);
   border-radius: 8px;
-  max-height: 180px;
+  max-height: 140px;
   overflow-y: auto;
   z-index: 10;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
@@ -427,7 +534,7 @@ h2 {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 10px 12px;
+  padding: 8px 10px;
   cursor: pointer;
   transition: all 0.15s;
 }
@@ -452,6 +559,78 @@ h2 {
   color: var(--theme-color);
   font-size: 12px;
   font-weight: bold;
+}
+
+.device-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.device-item {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.device-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  color: var(--theme-color);
+}
+
+.device-header .device-name {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text-color);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.device-settings {
+  padding: 4px 10px 8px;
+}
+
+.setting-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.row-label {
+  font-size: 10px;
+  color: var(--text-secondary);
+  width: 28px;
+}
+
+.slider {
+  flex: 1;
+  height: 3px;
+  -webkit-appearance: none;
+  background: var(--glass-border);
+  border-radius: 2px;
+  outline: none;
+}
+
+.slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  background: var(--theme-color);
+  border-radius: 50%;
+  cursor: pointer;
+}
+
+.row-value {
+  font-size: 10px;
+  color: var(--text-secondary);
+  width: 36px;
+  text-align: right;
 }
 
 .toggle-container {
@@ -498,43 +677,36 @@ h2 {
 }
 
 .about-section {
-  margin-top: auto;
-  padding-top: 16px;
+  flex-shrink: 0;
+  padding-top: 12px;
   text-align: center;
   border-top: 1px solid var(--glass-border);
 }
 
 .about-title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--text-color);
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .about-version {
-  font-size: 11px;
-  color: var(--theme-color);
-  margin-bottom: 4px;
-}
-
-.about-desc {
   font-size: 10px;
-  color: var(--text-secondary);
-  margin-bottom: 8px;
+  color: var(--theme-color);
+  margin-bottom: 6px;
 }
 
 .about-links {
   display: flex;
   justify-content: center;
-  gap: 12px;
-  margin-bottom: 6px;
+  gap: 8px;
 }
 
 .about-link {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: 10px;
   color: var(--text-secondary);
   text-decoration: none;
   padding: 4px 8px;
@@ -551,8 +723,8 @@ h2 {
 }
 
 .github-icon {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
 
 .update-btn {
@@ -572,10 +744,6 @@ h2 {
   background: rgba(34, 197, 94, 0.1);
 }
 
-.update-btn.has-update:hover {
-  background: rgba(34, 197, 94, 0.2);
-}
-
 .spinning {
   animation: spin 1s linear infinite;
 }
@@ -583,18 +751,5 @@ h2 {
 @keyframes spin {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
-}
-
-.update-info {
-  font-size: 10px;
-  color: #22c55e;
-  margin-top: 4px;
-  margin-bottom: 4px;
-}
-
-.about-license {
-  font-size: 10px;
-  color: var(--text-secondary);
-  opacity: 0.7;
 }
 </style>

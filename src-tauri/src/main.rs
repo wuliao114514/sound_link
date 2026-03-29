@@ -1,8 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod devices;
+mod router;
 
 use devices::{Device, DeviceManager, AudioDeviceManager};
+use router::{AudioRouter, RouterConfig, RouterDevice, RouterStatus, ValidationResult, VirtualDeviceStatus};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -22,10 +24,16 @@ struct AppConfig {
     advanced_material: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+struct SavedRouterConfig {
+    devices: Vec<RouterDevice>,
+}
+
 struct AppState {
     config: Mutex<AppConfig>,
     audio_manager: Mutex<AudioDeviceManager>,
     cached_data: Mutex<Option<InitialData>>,
+    router: Mutex<AudioRouter>,
 }
 
 fn get_config_path() -> PathBuf {
@@ -35,6 +43,16 @@ fn get_config_path() -> PathBuf {
         let _ = fs::create_dir_all(&path);
     }
     path.push("config.json");
+    path
+}
+
+fn get_router_config_path() -> PathBuf {
+    let mut path = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
+    path.push("sound-link");
+    if !path.exists() {
+        let _ = fs::create_dir_all(&path);
+    }
+    path.push("router_config.json");
     path
 }
 
@@ -58,6 +76,26 @@ fn save_config(config: &AppConfig) -> Result<(), String> {
         .map_err(|e| format!("Failed to write config: {}", e))
 }
 
+fn load_saved_router_config() -> SavedRouterConfig {
+    let path = get_router_config_path();
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(config) = serde_json::from_str(&content) {
+                return config;
+            }
+        }
+    }
+    SavedRouterConfig::default()
+}
+
+fn save_router_config_file(config: &SavedRouterConfig) -> Result<(), String> {
+    let path = get_router_config_path();
+    let content = serde_json::to_string_pretty(config)
+        .map_err(|e| format!("Failed to serialize router config: {}", e))?;
+    fs::write(&path, content)
+        .map_err(|e| format!("Failed to write router config: {}", e))
+}
+
 #[tauri::command]
 fn get_audio_devices(state: tauri::State<AppState>) -> Vec<Device> {
     let manager = state.audio_manager.lock().unwrap();
@@ -76,12 +114,45 @@ fn set_default_device(device_id: String, state: tauri::State<AppState>) -> Resul
     manager.set_default(&device_id)
 }
 
+/// 直接通过设备ID设置默认设备（不依赖 State）
+fn set_default_device_by_id(device_id: &str) -> Result<(), String> {
+    use std::process::Command;
+    
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
+    
+    #[cfg(windows)]
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    
+    let mut cmd = Command::new("powershell");
+    cmd.args([
+        "-NoProfile",
+        "-ExecutionPolicy", "Bypass",
+        "-Command",
+        &format!("Set-AudioDevice -Id '{}' -Default", device_id)
+    ]);
+    
+    #[cfg(windows)]
+    cmd.creation_flags(CREATE_NO_WINDOW);
+    
+    let output = cmd.output()
+        .map_err(|e| format!("Failed to execute command: {}", e))?;
+    
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to set default device: {}", stderr));
+    }
+    
+    Ok(())
+}
+
 #[derive(Serialize, Clone)]
 struct InitialData {
     devices: Vec<Device>,
     default_device_id: Option<String>,
     config: AppConfig,
     timestamp: u64,
+    virtual_device: VirtualDeviceStatus,
 }
 
 fn get_current_timestamp() -> u64 {
@@ -97,12 +168,15 @@ fn get_initial_data(state: tauri::State<AppState>) -> InitialData {
     let devices = manager.get_devices();
     let default_device_id = manager.get_default();
     let config = state.config.lock().unwrap().clone();
+    let router = state.router.lock().unwrap();
+    let virtual_device = router.get_virtual_device_status();
     
     InitialData {
         devices,
         default_device_id,
         config,
         timestamp: get_current_timestamp(),
+        virtual_device,
     }
 }
 
@@ -117,12 +191,15 @@ fn refresh_and_cache(state: tauri::State<AppState>) -> InitialData {
     let devices = manager.get_devices();
     let default_device_id = manager.get_default();
     let config = state.config.lock().unwrap().clone();
+    let router = state.router.lock().unwrap();
+    let virtual_device = router.get_virtual_device_status();
     
     let data = InitialData {
         devices,
         default_device_id,
         config,
         timestamp: get_current_timestamp(),
+        virtual_device,
     };
     
     *state.cached_data.lock().unwrap() = Some(data.clone());
@@ -202,6 +279,76 @@ fn get_system_theme() -> Option<bool> {
 #[cfg(not(target_os = "windows"))]
 fn get_system_theme() -> Option<bool> {
     None
+}
+
+// ========== 音频路由相关命令 ==========
+
+#[tauri::command]
+fn start_routing(device_ids: Vec<String>, state: tauri::State<AppState>) -> Result<(), String> {
+    let mut router = state.router.lock().unwrap();
+    router.start(device_ids)
+}
+
+#[tauri::command]
+fn stop_routing(state: tauri::State<AppState>) -> Result<(), String> {
+    let mut router = state.router.lock().unwrap();
+    router.stop();
+    Ok(())
+}
+
+#[tauri::command]
+fn get_router_status(state: tauri::State<AppState>) -> RouterStatus {
+    let router = state.router.lock().unwrap();
+    router.get_status()
+}
+
+#[tauri::command]
+fn set_router_device_volume(device_id: String, volume: f32, state: tauri::State<AppState>) -> Result<(), String> {
+    let mut router = state.router.lock().unwrap();
+    router.set_device_volume(&device_id, volume);
+    Ok(())
+}
+
+#[tauri::command]
+fn set_router_device_delay(device_id: String, delay_ms: u32, state: tauri::State<AppState>) -> Result<(), String> {
+    let mut router = state.router.lock().unwrap();
+    router.set_device_delay(&device_id, delay_ms);
+    Ok(())
+}
+
+#[tauri::command]
+fn validate_routing_targets(device_ids: Vec<String>, state: tauri::State<AppState>) -> ValidationResult {
+    let router = state.router.lock().unwrap();
+    router.validate_targets(&device_ids)
+}
+
+#[tauri::command]
+fn update_router_config(config: RouterConfig, state: tauri::State<AppState>) -> Result<(), String> {
+    let mut router = state.router.lock().unwrap();
+    router.update_config(config);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_router_config(state: tauri::State<AppState>) -> RouterConfig {
+    let router = state.router.lock().unwrap();
+    router.get_config().clone()
+}
+
+#[tauri::command]
+fn get_virtual_device_status(state: tauri::State<AppState>) -> VirtualDeviceStatus {
+    let router = state.router.lock().unwrap();
+    router.get_virtual_device_status()
+}
+
+#[tauri::command]
+fn get_saved_router_config() -> SavedRouterConfig {
+    load_saved_router_config()
+}
+
+#[tauri::command]
+fn save_router_config(config: SavedRouterConfig) -> Result<(), String> {
+    save_router_config_file(&config)
 }
 
 fn show_window(window: &WebviewWindow) {
@@ -381,6 +528,7 @@ fn main() {
             config: Mutex::new(config),
             audio_manager: Mutex::new(AudioDeviceManager::new()),
             cached_data: Mutex::new(None),
+            router: Mutex::new(AudioRouter::new()),
         })
         .invoke_handler(tauri::generate_handler![
             get_initial_data,
@@ -394,6 +542,17 @@ fn main() {
             set_config,
             get_system_accent_color,
             get_system_theme,
+            start_routing,
+            stop_routing,
+            get_router_status,
+            set_router_device_volume,
+            set_router_device_delay,
+            validate_routing_targets,
+            update_router_config,
+            get_router_config,
+            get_virtual_device_status,
+            get_saved_router_config,
+            save_router_config,
         ])
         .setup(|app| {
             setup_tray(app.handle())?;
@@ -406,6 +565,25 @@ fn main() {
             }
             
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // 退出时停止路由并恢复原设备
+                let app = window.app_handle();
+                if let Some(state) = app.try_state::<AppState>() {
+                    if let Ok(mut router) = state.router.lock() {
+                        if router.is_running() {
+                            router.stop();
+                        }
+                    }
+                    // 恢复到用户设置的默认设备
+                    if let Ok(config) = state.config.lock() {
+                        if let Some(ref device_id) = config.default_device_id {
+                            let _ = set_default_device_by_id(device_id);
+                        }
+                    }
+                }
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

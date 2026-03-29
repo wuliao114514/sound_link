@@ -29,6 +29,10 @@ const props = defineProps({
   advancedMaterial: {
     type: Boolean,
     default: false
+  },
+  isRouterMode: {
+    type: Boolean,
+    default: false
   }
 });
 
@@ -64,7 +68,11 @@ function handleClick() {
     class="device-ball"
     :class="[
       isActive ? 'snapped' : 'unsnapped', 
-      { 'advanced-material': advancedMaterial, 'is-loading': isLoading }
+      { 
+        'advanced-material': advancedMaterial, 
+        'is-loading': isLoading,
+        'router-mode': isRouterMode
+      }
     ]"
     :style="{
       left: `${position.x}px`,
@@ -296,5 +304,39 @@ function handleClick() {
 /* 浅色模式 - 名称 */
 [data-theme="light"] .device-ball .name {
   text-shadow: 0 1px 3px rgba(255, 255, 255, 0.9);
+}
+
+/* 路由模式样式 */
+.device-ball.router-mode.snapped {
+  background: linear-gradient(145deg, 
+    #8b5cf6, 
+    color-mix(in srgb, #8b5cf6 65%, black)
+  );
+  box-shadow: 
+    0 4px 16px rgba(0, 0, 0, 0.4),
+    0 0 12px rgba(139, 92, 246, 0.4),
+    0 0 24px rgba(139, 92, 246, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}
+
+.device-ball.router-mode.unsnapped:hover {
+  background: linear-gradient(145deg, 
+    rgba(139, 92, 246, 0.3), 
+    rgba(139, 92, 246, 0.15)
+  );
+  border-color: rgba(139, 92, 246, 0.4);
+}
+
+/* 浅色模式 - 路由模式 */
+[data-theme="light"] .device-ball.router-mode.snapped {
+  background: linear-gradient(145deg, 
+    #8b5cf6, 
+    color-mix(in srgb, #8b5cf6 75%, white)
+  );
+  box-shadow: 
+    0 4px 16px rgba(0, 0, 0, 0.15),
+    0 0 12px rgba(139, 92, 246, 0.4),
+    0 0 24px rgba(139, 92, 246, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
 }
 </style>

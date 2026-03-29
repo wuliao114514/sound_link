@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
-import { Monitor, Settings } from "lucide-vue-next";
+import { Monitor, Settings, Radio, Route } from "lucide-vue-next";
 import DeviceBall from "../components/DeviceBall.vue";
 import SettingsView from "./SettingsView.vue";
 
@@ -25,14 +25,33 @@ const appVersion = ref("");
 const hasUpdate = ref(false);
 const latestVersion = ref("");
 
+// 路由模式相关状态
+const isRouterMode = ref(false);
+const routerTargetIds = ref([]);
+const isRoutingActive = ref(false);
+const virtualDeviceStatus = ref({ is_installed: false, device_id: null, device_name: null });
+
+// 设备音量和延迟配置
+const deviceVolumes = ref({});
+const deviceDelays = ref({});
+
 const GITHUB_REPO = "CmzYa/sound_link";
 
 function handleSettingsClose() {
   showSettings.value = false;
 }
 
+function handleDeviceSettingsChanged(settings) {
+  // 同步设备设置到主界面
+  deviceVolumes.value[settings.deviceId] = settings.volume;
+  deviceDelays.value[settings.deviceId] = settings.delayMs;
+}
+
 const devices = computed(() => {
-  return allDevices.value.filter(d => d.id !== configDefaultDeviceId.value);
+  return allDevices.value.filter(d => 
+    d.id !== configDefaultDeviceId.value && 
+    !d.name.toLowerCase().includes('cable')
+  );
 });
 
 const devicePositions = computed(() => {
@@ -41,11 +60,16 @@ const devicePositions = computed(() => {
   const total = devices.value.length || 1;
   
   return devices.value.map((device, index) => {
-    const isActive = device.id === activeDeviceId.value;
+    // 路由模式：检查是否在广播目标列表中
+    // 普通模式：检查是否是当前激活设备
+    const isSnapped = isRouterMode.value 
+      ? routerTargetIds.value.includes(device.id)
+      : device.id === activeDeviceId.value;
+    
     const baseAngle = (index / total) * 2 * Math.PI;
     const offset = Math.PI / total;
     const angle = baseAngle + offset;
-    const radius = isActive ? SNAP_RADIUS : UNSNAP_RADIUS;
+    const radius = isSnapped ? SNAP_RADIUS : UNSNAP_RADIUS;
     
     return {
       x: centerX + Math.cos(angle) * radius - BALL_SIZE / 2,
@@ -59,6 +83,11 @@ function applyData(data) {
   activeDeviceId.value = data.default_device_id;
   configDefaultDeviceId.value = data.config.default_device_id;
   advancedMaterial.value = data.config.advanced_material || false;
+  
+  // 加载虚拟设备状态
+  if (data.virtual_device) {
+    virtualDeviceStatus.value = data.virtual_device;
+  }
   
   if (activeDeviceId.value === configDefaultDeviceId.value) {
     activeDeviceId.value = null;
@@ -99,12 +128,53 @@ async function loadCachedOrRefresh() {
 async function handleDeviceClick(device) {
   if (switchingDeviceId.value) return;
   
+  // 路由模式：多选设备加入/移出广播目标
+  if (isRouterMode.value) {
+    const index = routerTargetIds.value.indexOf(device.id);
+    if (index === -1) {
+      routerTargetIds.value.push(device.id);
+    } else {
+      routerTargetIds.value.splice(index, 1);
+    }
+    
+    // 如果正在广播，动态更新广播目标
+    if (isRoutingActive.value) {
+      try {
+        if (routerTargetIds.value.length > 0) {
+          const config = {
+            devices: routerTargetIds.value.map(id => {
+              const d = devices.value.find(dev => dev.id === id);
+              return {
+                id,
+                name: d?.name || "",
+                volume: 1.0,
+                delay_ms: 0,
+                enabled: true
+              };
+            }),
+            sync_volume: false,
+            master_device_id: null
+          };
+          await invoke("update_router_config", { config });
+          await invoke("start_routing", { deviceIds: routerTargetIds.value });
+        } else {
+          // 没有目标设备时停止广播
+          await invoke("stop_routing");
+          isRoutingActive.value = false;
+        }
+      } catch (e) {
+        console.error("Failed to update routing:", e);
+      }
+    }
+    return;
+  }
+  
+  // 普通模式：单选切换默认设备
   const previousDeviceId = activeDeviceId.value;
   switchingDeviceId.value = device.id;
   
   try {
     if (device.id === activeDeviceId.value) {
-      // 未设置默认设备时，禁止取消选择
       if (!configDefaultDeviceId.value) {
         return;
       }
@@ -117,6 +187,143 @@ async function handleDeviceClick(device) {
   } catch (e) {
     console.error("Failed to set device:", e);
     activeDeviceId.value = previousDeviceId;
+  } finally {
+    switchingDeviceId.value = null;
+  }
+}
+
+// 切换路由/管理模式
+function toggleMode() {
+  if (isRouterMode.value) {
+    exitRouterMode();
+  } else {
+    enterRouterMode();
+  }
+}
+
+// 中心球点击处理
+async function handleCenterBallClick() {
+  if (switchingDeviceId.value) return;
+  
+  if (isRouterMode.value) {
+    // 路由模式：切换广播开启/关闭
+    await toggleRouting();
+  } else {
+    // 管理模式：设置默认设备
+    if (!configDefaultDeviceId.value) return;
+    
+    switchingDeviceId.value = "center";
+    try {
+      if (activeDeviceId.value === configDefaultDeviceId.value) {
+        // 当前是默认设备，不做操作或提示
+      } else {
+        // 切换回默认设备
+        activeDeviceId.value = null;
+        await invoke("set_default_device", { deviceId: configDefaultDeviceId.value });
+      }
+    } catch (e) {
+      console.error("Failed to set default device:", e);
+    } finally {
+      switchingDeviceId.value = null;
+    }
+  }
+}
+
+// 进入路由模式
+async function enterRouterMode() {
+  if (!virtualDeviceStatus.value.is_installed) {
+    alert("音频路由需要 VB-Cable 虚拟设备，请先安装");
+    return;
+  }
+  
+  isRouterMode.value = true;
+  
+  // 加载保存的设备配置
+  try {
+    const savedConfig = await invoke("get_saved_router_config");
+    if (savedConfig && savedConfig.devices) {
+      for (const device of savedConfig.devices) {
+        deviceVolumes.value[device.id] = device.volume;
+        deviceDelays.value[device.id] = device.delay_ms;
+      }
+    }
+  } catch (e) {
+    console.error("Failed to load saved router config:", e);
+  }
+  
+  // 继承当前设备管理模式下选择的设备作为广播目标
+  if (activeDeviceId.value) {
+    routerTargetIds.value = [activeDeviceId.value];
+  } else {
+    routerTargetIds.value = [];
+  }
+  
+  // 加载当前路由状态
+  try {
+    const status = await invoke("get_router_status");
+    if (status.is_running) {
+      isRoutingActive.value = true;
+      routerTargetIds.value = status.target_devices
+        .filter(d => d.enabled && d.id !== virtualDeviceStatus.value.device_id)
+        .map(d => d.id);
+    }
+  } catch (e) {
+    console.error("Failed to load router status:", e);
+  }
+}
+
+// 退出路由模式
+async function exitRouterMode() {
+  // 如果正在广播，先停止
+  if (isRoutingActive.value) {
+    try {
+      await invoke("stop_routing");
+    } catch (e) {
+      console.error("Failed to stop routing:", e);
+    }
+    isRoutingActive.value = false;
+  }
+  isRouterMode.value = false;
+  routerTargetIds.value = [];
+}
+
+// 开始广播
+async function startRouting() {
+  if (routerTargetIds.value.length === 0) return;
+  
+  const config = {
+    devices: routerTargetIds.value.map(id => {
+      const device = devices.value.find(d => d.id === id);
+      return {
+        id,
+        name: device?.name || "",
+        volume: deviceVolumes.value[id] ?? 1.0,
+        delay_ms: deviceDelays.value[id] ?? 0,
+        enabled: true
+      };
+    })
+  };
+  
+  await invoke("update_router_config", { config });
+  await invoke("start_routing", { deviceIds: routerTargetIds.value });
+  isRoutingActive.value = true;
+}
+
+// 切换路由状态（开始/停止广播）
+async function toggleRouting() {
+  if (switchingDeviceId.value) return;
+  switchingDeviceId.value = "routing";
+  
+  try {
+    if (isRoutingActive.value) {
+      await invoke("stop_routing");
+      isRoutingActive.value = false;
+    } else if (routerTargetIds.value.length > 0) {
+      await startRouting();
+    }
+  } catch (e) {
+    console.error("Failed to toggle routing:", e);
+    alert(e);
   } finally {
     switchingDeviceId.value = null;
   }
@@ -278,9 +485,14 @@ onUnmounted(() => {
 
 <template>
   <div id="app" :class="{ 'advanced-material': advancedMaterial, 'is-ready': isReady }" @click="handleAppClick">
-    <button v-if="!showSettings" class="settings-btn" :class="{ 'has-update': hasUpdate }" @click.stop="showSettings = !showSettings">
-      <Settings :size="16" />
-    </button>
+    <div v-if="!showSettings" class="top-buttons">
+      <button class="mode-btn" :class="{ 'router-mode': isRouterMode }" @click.stop="toggleMode" :title="isRouterMode ? '管理模式' : '路由模式'">
+        <Route :size="16" />
+      </button>
+      <button class="settings-btn" :class="{ 'has-update': hasUpdate }" @click.stop="showSettings = !showSettings">
+        <Settings :size="16" />
+      </button>
+    </div>
     
     <SettingsView 
       v-if="showSettings" 
@@ -291,14 +503,28 @@ onUnmounted(() => {
       :has-update="hasUpdate"
       :latest-version="latestVersion"
       @close="handleSettingsClose" 
-      @config-changed="refreshDevices" 
+      @config-changed="refreshDevices"
+      @device-settings-changed="handleDeviceSettingsChanged"
     />
     
     <template v-else>
       <div class="container">
-        <div class="center-ball" :class="{ 'advanced-material': advancedMaterial }">
+        <div 
+          class="center-ball" 
+          :class="{ 
+            'advanced-material': advancedMaterial, 
+            'router-mode': isRouterMode,
+            'routing-active': isRoutingActive,
+            'no-vb-cable': !virtualDeviceStatus.is_installed
+          }"
+          @click="handleCenterBallClick"
+        >
           <div class="center-inner">
-            <Monitor :size="26" class="icon" />
+            <Radio v-if="isRouterMode" :size="26" class="icon" />
+            <Monitor v-else :size="26" class="icon" />
+          </div>
+          <div v-if="isRouterMode" class="router-indicator">
+            {{ isRoutingActive ? '停止' : '开始' }}
           </div>
         </div>
         
@@ -306,15 +532,28 @@ onUnmounted(() => {
           v-for="(device, index) in devices"
           :key="device.id"
           :device="device"
-          :is-active="device.id === activeDeviceId"
+          :is-active="isRouterMode ? routerTargetIds.includes(device.id) : device.id === activeDeviceId"
           :is-loading="device.id === switchingDeviceId"
           :position="devicePositions[index]"
           :advanced-material="advancedMaterial"
+          :is-router-mode="isRouterMode"
           @click="handleDeviceClick(device)"
         />
         
         <div v-if="devices.length === 0" class="no-device-hint">
           未检测到音频设备
+        </div>
+        
+        <div v-if="isRouterMode" class="router-status">
+          <span v-if="isRoutingActive" class="status-active">
+            广播中 ({{ routerTargetIds.length }} 设备)
+          </span>
+          <span v-else-if="routerTargetIds.length > 0" class="status-ready">
+            已选择 {{ routerTargetIds.length }} 个设备
+          </span>
+          <span v-else class="status-hint">
+            点击设备选择广播目标
+          </span>
         </div>
       </div>
     </template>
@@ -339,11 +578,45 @@ onUnmounted(() => {
   height: 280px;
 }
 
-.settings-btn {
+.top-buttons {
   position: absolute;
   top: 8px;
   right: 8px;
   z-index: 100;
+  display: flex;
+  gap: 6px;
+}
+
+.mode-btn {
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: var(--glass-bg);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  backdrop-filter: blur(10px) saturate(180%);
+  -webkit-backdrop-filter: blur(10px) saturate(180%);
+  border: 1px solid var(--glass-border);
+}
+
+.mode-btn:hover {
+  background: color-mix(in srgb, var(--glass-bg) 120%, var(--theme-color));
+  color: var(--text-color);
+  border-color: var(--theme-color);
+}
+
+.mode-btn.router-mode {
+  color: #8b5cf6;
+  border-color: #8b5cf6;
+  background: rgba(139, 92, 246, 0.15);
+}
+
+.settings-btn {
   width: 28px;
   height: 28px;
   border: none;
@@ -383,7 +656,7 @@ onUnmounted(() => {
   will-change: transform;
   transform: translate3d(-50%, -50%, 0);
   backface-visibility: hidden;
-  pointer-events: none;
+  cursor: pointer;
 }
 
 .center-inner {
@@ -485,5 +758,81 @@ onUnmounted(() => {
 [data-theme="light"] .center-ball.advanced-material::after {
   filter: blur(15px);
   opacity: 0.7;
+}
+
+/* 路由模式样式 */
+.center-ball.router-mode .center-inner {
+  background: linear-gradient(145deg, 
+    #8b5cf6, 
+    color-mix(in srgb, #8b5cf6 65%, black)
+  );
+}
+
+.center-ball.routing-active .center-inner {
+  background: linear-gradient(145deg, 
+    #22c55e, 
+    color-mix(in srgb, #22c55e 65%, black)
+  );
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.center-ball.no-vb-cable .center-inner {
+  background: linear-gradient(145deg, 
+    #f59e0b, 
+    color-mix(in srgb, #f59e0b 65%, black)
+  );
+}
+
+@keyframes pulse {
+  0%, 100% { box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4), 0 0 25px var(--theme-glow); }
+  50% { box-shadow: 0 4px 30px rgba(34, 197, 94, 0.6), 0 0 40px rgba(34, 197, 94, 0.4); }
+}
+
+.router-indicator {
+  position: absolute;
+  bottom: -24px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.router-status {
+  position: absolute;
+  bottom: -45px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.router-status .status-active {
+  color: #22c55e;
+}
+
+.router-status .status-ready {
+  color: #8b5cf6;
+}
+
+.router-status .status-hint {
+  color: var(--text-tertiary);
+}
+
+/* 浅色模式 - 路由模式 */
+[data-theme="light"] .center-ball.router-mode .center-inner {
+  background: linear-gradient(145deg, 
+    #8b5cf6, 
+    color-mix(in srgb, #8b5cf6 75%, white)
+  );
+}
+
+[data-theme="light"] .center-ball.routing-active .center-inner {
+  background: linear-gradient(145deg, 
+    #22c55e, 
+    color-mix(in srgb, #22c55e 75%, white)
+  );
 }
 </style>
