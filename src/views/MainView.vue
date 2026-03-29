@@ -141,18 +141,15 @@ async function handleDeviceClick(device) {
               return {
                 id,
                 name: d?.name || "",
-                volume: 1.0,
-                delay_ms: 0,
+                volume: deviceVolumes.value[id] ?? 1.0,
+                delay_ms: deviceDelays.value[id] ?? 0,
                 enabled: true
               };
-            }),
-            sync_volume: false,
-            master_device_id: null
+            })
           };
           await invoke("update_router_config", { config });
           await invoke("start_routing", { deviceIds: routerTargetIds.value });
         } else {
-          // 没有目标设备时停止广播
           await invoke("stop_routing");
           isRoutingActive.value = false;
         }

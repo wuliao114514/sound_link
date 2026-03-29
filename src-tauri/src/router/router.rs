@@ -162,8 +162,10 @@ impl AudioRouter {
 
     /// 启动路由
     pub fn start(&mut self, target_device_ids: Vec<String>) -> Result<(), String> {
+        // 如果已经在运行，先停止再重启以更新目标设备
         if self.running.load(Ordering::SeqCst) {
-            return Err("Router already running".to_string());
+            self.stop();
+            thread::sleep(Duration::from_millis(50));
         }
 
         // 检查 VB-Cable 是否已安装
@@ -518,20 +520,8 @@ impl AudioRouter {
             // 从延迟缓冲区读取并渲染
             for (device_id, render_client) in render_outputs.iter() {
                 if let Some(buffer) = delay_buffers.get_mut(device_id) {
-                    // 实时获取应用层音量
-                    let app_volume = shared_volumes
-                        .lock()
-                        .ok()
-                        .and_then(|v| v.get(device_id).copied())
-                        .unwrap_or(1.0);
-
-                    // 总音量 = 系统音量 * 应用层音量 * 增益
-                    // 增益 7.0 补偿 VB-Cable 捕获的音量损失
-                    let total_volume = system_volume * app_volume;
-
                     if let Ok(out_ptr) = render_client.GetBuffer(num_frames) {
                         if !out_ptr.is_null() {
-                            // 直接写入输出缓冲区，避免中间分配
                             let out_slice = std::slice::from_raw_parts_mut(
                                 out_ptr as *mut f32,
                                 (num_frames as usize) * channels as usize,
@@ -540,8 +530,7 @@ impl AudioRouter {
                             for frame in out_slice.chunks_mut(channels as usize) {
                                 let delayed_frame = buffer.pop_or_silent();
                                 for (j, sample) in frame.iter_mut().enumerate() {
-                                    *sample =
-                                        delayed_frame.get(j).copied().unwrap_or(0.0) * total_volume;
+                                    *sample = delayed_frame.get(j).copied().unwrap_or(0.0);
                                 }
                             }
                             let _ = render_client.ReleaseBuffer(num_frames, 0);
