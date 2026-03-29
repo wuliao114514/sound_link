@@ -25,9 +25,10 @@ impl AudioDeviceManager {
         let mut cmd = Command::new("powershell");
         cmd.args([
             "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
+            "-ExecutionPolicy",
+            "Bypass",
             "-Command",
-            "Get-Module -ListAvailable -Name AudioDeviceCmdlets | Select-Object -First 1"
+            "Get-Module -ListAvailable -Name AudioDeviceCmdlets | Select-Object -First 1",
         ]);
 
         #[cfg(windows)]
@@ -44,9 +45,10 @@ impl AudioDeviceManager {
         let mut cmd = Command::new("powershell");
         cmd.args([
             "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
+            "-ExecutionPolicy",
+            "Bypass",
             "-Command",
-            "Install-Module -Name AudioDeviceCmdlets -Force -Scope CurrentUser"
+            "Install-Module -Name AudioDeviceCmdlets -Force -Scope CurrentUser",
         ]);
 
         #[cfg(windows)]
@@ -65,27 +67,31 @@ impl DeviceManager for AudioDeviceManager {
             "-Command",
             "chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' } | ForEach-Object { \"$($_.Id)|$($_.Name)\" }"
         ]);
-        
+
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
-        
+
         let output = cmd.output();
-        
+
         let mut devices = Vec::new();
-        
+
         if let Ok(output) = output {
             let stdout = String::from_utf8_lossy(&output.stdout);
             for line in stdout.lines() {
                 let line = line.trim();
-                if line.is_empty() { continue; }
-                if line.starts_with("Active code page:") { continue; }
-                
+                if line.is_empty() {
+                    continue;
+                }
+                if line.starts_with("Active code page:") {
+                    continue;
+                }
+
                 let parts: Vec<&str> = line.splitn(2, '|').collect();
                 if parts.len() == 2 {
                     let id = parts[0].to_string();
                     let raw_name = parts[1].to_string();
                     let (device_type, clean_name) = parse_device_info(&id, &raw_name);
-                    
+
                     devices.push(Device {
                         id,
                         name: clean_name,
@@ -95,10 +101,10 @@ impl DeviceManager for AudioDeviceManager {
                 }
             }
         }
-        
+
         devices
     }
-    
+
     fn get_default(&self) -> Option<String> {
         let mut cmd = Command::new("powershell");
         cmd.args([
@@ -107,22 +113,26 @@ impl DeviceManager for AudioDeviceManager {
             "-Command",
             "chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; (Get-AudioDevice -Playback).Id"
         ]);
-        
+
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
-        
+
         let output = cmd.output().ok()?;
-        
+
         let stdout = String::from_utf8_lossy(&output.stdout);
         let id = stdout.trim().to_string();
-        if id.is_empty() { None } else { Some(id) }
+        if id.is_empty() {
+            None
+        } else {
+            Some(id)
+        }
     }
-    
+
     fn set_default(&self, device_id: &str) -> Result<(), String> {
         if device_id.is_empty() {
             return Ok(());
         }
-        
+
         let mut cmd = Command::new("powershell");
         cmd.args([
             "-NoProfile",
@@ -130,18 +140,19 @@ impl DeviceManager for AudioDeviceManager {
             "-Command",
             &format!("chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Set-AudioDevice -Id '{}' -Default", device_id)
         ]);
-        
+
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
-        
-        let output = cmd.output()
+
+        let output = cmd
+            .output()
             .map_err(|e| format!("Failed to execute command: {}", e))?;
-        
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!("Failed to set device: {}", stderr));
         }
-        
+
         Ok(())
     }
 }
@@ -149,7 +160,7 @@ impl DeviceManager for AudioDeviceManager {
 fn parse_device_info(id: &str, raw_name: &str) -> (String, String) {
     let name_lower = raw_name.to_lowercase();
     let id_lower = id.to_lowercase();
-    
+
     let (device_type, clean_name) = if name_lower.contains("耳机") {
         let name = extract_hardware_name(raw_name, "耳机");
         ("headphones".to_string(), name)
@@ -169,7 +180,7 @@ fn parse_device_info(id: &str, raw_name: &str) -> (String, String) {
     } else {
         ("speakers".to_string(), raw_name.to_string())
     };
-    
+
     (device_type, clean_name)
 }
 

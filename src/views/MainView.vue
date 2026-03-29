@@ -4,7 +4,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
-import { Monitor, Settings, Radio, Route } from "lucide-vue-next";
+import { open } from "@tauri-apps/plugin-shell";
+import { Monitor, Settings, Radio, Route, ExternalLink, RefreshCw } from "lucide-vue-next";
 import DeviceBall from "../components/DeviceBall.vue";
 import SettingsView from "./SettingsView.vue";
 
@@ -30,6 +31,8 @@ const isRouterMode = ref(false);
 const routerTargetIds = ref([]);
 const isRoutingActive = ref(false);
 const virtualDeviceStatus = ref({ is_installed: false, device_id: null, device_name: null });
+const showInstallDialog = ref(false);
+const isRefreshing = ref(false);
 
 // 设备音量和延迟配置
 const deviceVolumes = ref({});
@@ -232,7 +235,7 @@ async function handleCenterBallClick() {
 // 进入路由模式
 async function enterRouterMode() {
   if (!virtualDeviceStatus.value.is_installed) {
-    alert("音频路由需要 VB-Cable 虚拟设备，请先安装");
+    showInstallDialog.value = true;
     return;
   }
   
@@ -269,6 +272,27 @@ async function enterRouterMode() {
     }
   } catch (e) {
     console.error("Failed to load router status:", e);
+  }
+}
+
+// 打开 VB-Cable 下载页面
+function openDownloadPage() {
+  open("https://vb-audio.com/Cable/");
+}
+
+// 刷新虚拟设备检测
+async function refreshVirtualDevice() {
+  isRefreshing.value = true;
+  try {
+    const data = await invoke("get_initial_data");
+    applyData(data);
+    if (virtualDeviceStatus.value.is_installed) {
+      showInstallDialog.value = false;
+    }
+  } catch (e) {
+    console.error("Failed to refresh virtual device:", e);
+  } finally {
+    isRefreshing.value = false;
   }
 }
 
@@ -485,6 +509,39 @@ onUnmounted(() => {
 
 <template>
   <div id="app" :class="{ 'advanced-material': advancedMaterial, 'is-ready': isReady }" @click="handleAppClick">
+    <!-- VB-Cable 安装提示弹窗 -->
+    <div v-if="showInstallDialog" class="install-dialog-overlay" @click.stop>
+      <div class="install-dialog">
+        <div class="install-icon">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+        </div>
+        <h3>需要安装虚拟音频设备</h3>
+        <p class="install-desc">
+          音频路由功能需要 VB-Cable 虚拟音频设备。<br>
+          请下载安装后点击刷新检测。
+        </p>
+        <div class="install-actions">
+          <button class="install-btn primary" @click="openDownloadPage">
+            <ExternalLink :size="16" />
+            打开下载页面
+          </button>
+          <button class="install-btn" :disabled="isRefreshing" @click="refreshVirtualDevice">
+            <RefreshCw :size="16" :class="{ 'spinning': isRefreshing }" />
+            {{ isRefreshing ? '检测中...' : '刷新检测' }}
+          </button>
+        </div>
+        <button class="install-close" @click="showInstallDialog = false">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    
     <div v-if="!showSettings" class="top-buttons">
       <button class="mode-btn" :class="{ 'router-mode': isRouterMode }" @click.stop="toggleMode" :title="isRouterMode ? '管理模式' : '路由模式'">
         <Route :size="16" />
@@ -834,5 +891,131 @@ onUnmounted(() => {
     #22c55e, 
     color-mix(in srgb, #22c55e 75%, white)
   );
+}
+
+/* 安装提示弹窗 */
+.install-dialog-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  backdrop-filter: blur(4px);
+}
+
+.install-dialog {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: 16px;
+  padding: 24px;
+  max-width: 320px;
+  text-align: center;
+  position: relative;
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.install-icon {
+  width: 72px;
+  height: 72px;
+  margin: 0 auto 16px;
+  border-radius: 50%;
+  background: linear-gradient(145deg, #f59e0b, #d97706);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+}
+
+.install-dialog h3 {
+  margin: 0 0 12px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-color);
+}
+
+.install-desc {
+  margin: 0 0 20px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.install-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.install-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  background: var(--glass-bg);
+  color: var(--text-color);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.install-btn:hover:not(:disabled) {
+  border-color: var(--theme-color);
+  background: color-mix(in srgb, var(--glass-bg) 120%, var(--theme-color));
+}
+
+.install-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.install-btn.primary {
+  background: linear-gradient(145deg, #f59e0b, #d97706);
+  border-color: transparent;
+  color: white;
+}
+
+.install-btn.primary:hover {
+  background: linear-gradient(145deg, #fbbf24, #f59e0b);
+}
+
+.install-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+
+.install-close:hover {
+  background: var(--glass-border);
+  color: var(--text-color);
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>

@@ -6,9 +6,11 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use scopeguard::defer;
-use windows::Win32::Media::Audio::*;
 use windows::Win32::Media::Audio::Endpoints::IAudioEndpointVolume;
-use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED};
+use windows::Win32::Media::Audio::*;
+use windows::Win32::System::Com::{
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+};
 
 use super::delay_buffer::DelayBuffer;
 use crate::router::{RouterConfig, RouterStatus, ValidationResult, VirtualDeviceStatus};
@@ -54,7 +56,7 @@ impl AudioRouter {
             shared_delays: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    
+
     /// 查找 VB-Cable 虚拟设备（通过 PowerShell）
     fn find_vb_cable_device() -> Option<String> {
         let mut cmd = Command::new("powershell");
@@ -64,10 +66,10 @@ impl AudioRouter {
             "-Command",
             "chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Get-AudioDevice -List | Where-Object { $_.Type -eq 'Playback' } | Where-Object { $_.Name -match 'CABLE Input|VB-Audio|VB-Cable|Virtual Cable' } | Select-Object -First 1 -ExpandProperty Id"
         ]);
-        
+
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
-        
+
         if let Ok(output) = cmd.output() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let id = stdout.trim().to_string();
@@ -77,18 +79,19 @@ impl AudioRouter {
         }
         None
     }
-    
+
     /// 获取 VB-Cable 状态
     pub fn get_virtual_device_status(&self) -> VirtualDeviceStatus {
         VirtualDeviceStatus {
             is_installed: self.vb_cable_id.is_some(),
             device_id: self.vb_cable_id.clone(),
-            device_name: self.vb_cable_id.as_ref().and_then(|id| {
-                Self::get_device_name_by_id(id)
-            }),
+            device_name: self
+                .vb_cable_id
+                .as_ref()
+                .and_then(|id| Self::get_device_name_by_id(id)),
         }
     }
-    
+
     /// 获取设备名称（通过 PowerShell）
     fn get_device_name_by_id(device_id: &str) -> Option<String> {
         let mut cmd = Command::new("powershell");
@@ -98,10 +101,10 @@ impl AudioRouter {
             "-Command",
             &format!("chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; (Get-AudioDevice -Id '{}').Name", device_id)
         ]);
-        
+
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
-        
+
         if let Ok(output) = cmd.output() {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let name = stdout.trim().to_string();
@@ -111,36 +114,41 @@ impl AudioRouter {
         }
         None
     }
-    
+
     /// 获取默认输出设备ID
     pub fn get_default_output_device_id(&self) -> Result<String, String> {
         unsafe {
             let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
             defer! { CoUninitialize(); }
-            
-            let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-                .map_err(|e| format!("Failed to create enumerator: {:?}", e))?;
-            
-            let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)
+
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                    .map_err(|e| format!("Failed to create enumerator: {:?}", e))?;
+
+            let device = enumerator
+                .GetDefaultAudioEndpoint(eRender, eConsole)
                 .map_err(|e| format!("Failed to get default device: {:?}", e))?;
-            
-            let id = device.GetId()
+
+            let id = device
+                .GetId()
                 .map_err(|e| format!("Failed to get device id: {:?}", e))?;
-            
-            Ok(id.to_string().map_err(|e| format!("Failed to convert id: {:?}", e))?)
+
+            Ok(id
+                .to_string()
+                .map_err(|e| format!("Failed to convert id: {:?}", e))?)
         }
     }
-    
+
     /// 验证路由目标
     pub fn validate_targets(&self, device_ids: &[String]) -> ValidationResult {
         let default_id = self.get_default_output_device_id().ok();
-        
+
         let conflicts: Vec<String> = device_ids
             .iter()
             .filter(|id| Some(id.as_str()) == default_id.as_deref())
             .cloned()
             .collect();
-        
+
         ValidationResult {
             has_conflicts: !conflicts.is_empty(),
             conflict_devices: conflicts,
@@ -151,40 +159,40 @@ impl AudioRouter {
             },
         }
     }
-    
+
     /// 启动路由
     pub fn start(&mut self, target_device_ids: Vec<String>) -> Result<(), String> {
         if self.running.load(Ordering::SeqCst) {
             return Err("Router already running".to_string());
         }
-        
+
         // 检查 VB-Cable 是否已安装
         let vb_cable_id = self.vb_cable_id.clone();
         if vb_cable_id.is_none() {
             return Err("未检测到 VB-Cable 虚拟设备，请先安装 VB-Cable".to_string());
         }
-        
+
         let vb_cable_id = vb_cable_id.unwrap();
-        
+
         // 保存当前默认设备
         let current_default = self.get_default_output_device_id()?;
         self.original_default_device_id = Some(current_default.clone());
-        
+
         // 如果当前默认设备不是 VB-Cable，切换到 VB-Cable
         if current_default != vb_cable_id {
             self.set_default_device(&vb_cable_id)?;
         }
-        
+
         // 设置源设备为 VB-Cable
         self.source_device_id = Some(vb_cable_id.clone());
         self.source_device_name = Self::get_device_name_by_id(&vb_cable_id);
-        
+
         // 过滤目标设备（排除 VB-Cable）
         let valid_targets: Vec<String> = target_device_ids
             .into_iter()
             .filter(|id| id != &vb_cable_id)
             .collect();
-        
+
         if valid_targets.is_empty() {
             // 恢复原默认设备
             if let Some(original) = &self.original_default_device_id {
@@ -192,18 +200,18 @@ impl AudioRouter {
             }
             return Err("没有有效的目标设备".to_string());
         }
-        
+
         // 初始化延迟缓冲区
         self.delay_buffers.clear();
         for device in &self.config.devices {
             if valid_targets.contains(&device.id) && device.enabled {
                 self.delay_buffers.insert(
                     device.id.clone(),
-                    DelayBuffer::new(device.delay_ms, self.sample_rate, self.channels as usize)
+                    DelayBuffer::new(device.delay_ms, self.sample_rate, self.channels as usize),
                 );
             }
         }
-        
+
         // 初始化共享数据
         {
             let mut volumes = self.shared_volumes.lock().unwrap();
@@ -217,50 +225,57 @@ impl AudioRouter {
                 }
             }
         }
-        
+
         // 启动路由线程
         self.running.store(true, Ordering::SeqCst);
         let running = self.running.clone();
         let config = self.config.clone();
         let shared_volumes = self.shared_volumes.clone();
         let shared_delays = self.shared_delays.clone();
-        
-        let handle = thread::spawn(move || {
-            unsafe {
-                if let Err(e) = Self::router_loop(vb_cable_id, valid_targets, config, running, shared_volumes, shared_delays) {
-                    eprintln!("Router loop error: {}", e);
-                }
+
+        let handle = thread::spawn(move || unsafe {
+            if let Err(e) = Self::router_loop(
+                vb_cable_id,
+                valid_targets,
+                config,
+                running,
+                shared_volumes,
+                shared_delays,
+            ) {
+                eprintln!("Router loop error: {}", e);
             }
         });
-        
+
         self.thread_handle = Some(handle);
         Ok(())
     }
-    
+
     /// 设置默认设备（通过 PowerShell）
     fn set_default_device(&self, device_id: &str) -> Result<(), String> {
         let mut cmd = Command::new("powershell");
         cmd.args([
             "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
+            "-ExecutionPolicy",
+            "Bypass",
             "-Command",
-            &format!("Set-AudioDevice -Id '{}' -Default", device_id)
+            &format!("Set-AudioDevice -Id '{}' -Default", device_id),
         ]);
-        
+
         #[cfg(windows)]
         cmd.creation_flags(CREATE_NO_WINDOW);
-        
-        let output = cmd.output()
+
+        let output = cmd
+            .output()
             .map_err(|e| format!("Failed to execute command: {}", e))?;
-        
+
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             return Err(format!("Failed to set default device: {}", stderr));
         }
-        
+
         Ok(())
     }
-    
+
     /// 停止路由
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
@@ -268,19 +283,19 @@ impl AudioRouter {
             let _ = handle.join();
         }
         self.delay_buffers.clear();
-        
+
         // 恢复原默认设备
         if let Some(original_id) = &self.original_default_device_id {
             let _ = self.set_default_device(original_id);
         }
         self.original_default_device_id = None;
     }
-    
+
     /// 检查是否正在运行
     pub fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
-    
+
     /// 获取状态
     pub fn get_status(&self) -> RouterStatus {
         RouterStatus {
@@ -292,7 +307,7 @@ impl AudioRouter {
             original_default_device_id: self.original_default_device_id.clone(),
         }
     }
-    
+
     /// 设置设备音量
     pub fn set_device_volume(&mut self, device_id: &str, volume: f32) {
         if let Some(device) = self.config.devices.iter_mut().find(|d| d.id == device_id) {
@@ -303,7 +318,7 @@ impl AudioRouter {
             volumes.insert(device_id.to_string(), volume);
         }
     }
-    
+
     /// 设置设备延迟
     pub fn set_device_delay(&mut self, device_id: &str, delay_ms: u32) {
         if let Some(buffer) = self.delay_buffers.get_mut(device_id) {
@@ -317,17 +332,17 @@ impl AudioRouter {
             delays.insert(device_id.to_string(), delay_ms);
         }
     }
-    
+
     /// 更新配置
     pub fn update_config(&mut self, config: RouterConfig) {
         self.config = config;
     }
-    
+
     /// 获取配置
     pub fn get_config(&self) -> &RouterConfig {
         &self.config
     }
-    
+
     unsafe fn router_loop(
         source_device_id: String,
         target_ids: Vec<String>,
@@ -338,83 +353,99 @@ impl AudioRouter {
     ) -> Result<(), String> {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
         defer! { CoUninitialize(); }
-        
+
         // 初始化捕获（从 VB-Cable 捕获）
-        let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
-            .map_err(|e| format!("Failed to create enumerator: {:?}", e))?;
-        
+        let enumerator: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|e| format!("Failed to create enumerator: {:?}", e))?;
+
         let source_id = windows::core::HSTRING::from(source_device_id.as_str());
-        let capture_device = enumerator.GetDevice(&source_id)
+        let capture_device = enumerator
+            .GetDevice(&source_id)
             .map_err(|e| format!("Failed to get VB-Cable device: {:?}", e))?;
-        
-        let capture_client: IAudioClient = capture_device.Activate(CLSCTX_ALL, None)
+
+        let capture_client: IAudioClient = capture_device
+            .Activate(CLSCTX_ALL, None)
             .map_err(|e| format!("Failed to activate capture client: {:?}", e))?;
-        
-        let format_ptr = capture_client.GetMixFormat()
+
+        let format_ptr = capture_client
+            .GetMixFormat()
             .map_err(|e| format!("Failed to get format: {:?}", e))?;
-        
+
         let wave_format = &*format_ptr;
         let sample_rate = wave_format.nSamplesPerSec;
         let channels = wave_format.nChannels as u32;
-        
-        capture_client.Initialize(
-            AUDCLNT_SHAREMODE_SHARED,
-            AUDCLNT_STREAMFLAGS_LOOPBACK,
-            10_000_000,
-            0,
-            format_ptr,
-            None,
-        ).map_err(|e| format!("Failed to initialize capture: {:?}", e))?;
-        
-        let capture: IAudioCaptureClient = capture_client.GetService()
+
+        capture_client
+            .Initialize(
+                AUDCLNT_SHAREMODE_SHARED,
+                AUDCLNT_STREAMFLAGS_LOOPBACK,
+                10_000_000,
+                0,
+                format_ptr,
+                None,
+            )
+            .map_err(|e| format!("Failed to initialize capture: {:?}", e))?;
+
+        let capture: IAudioCaptureClient = capture_client
+            .GetService()
             .map_err(|e| format!("Failed to get capture client: {:?}", e))?;
-        capture_client.Start()
+        capture_client
+            .Start()
             .map_err(|e| format!("Failed to start capture: {:?}", e))?;
         defer! { let _ = capture_client.Stop(); }
-        
+
         // 获取源设备(VB-Cable)的系统音量控制接口
-        let source_volume: IAudioEndpointVolume = capture_device.Activate(CLSCTX_ALL, None)
+        let source_volume: IAudioEndpointVolume = capture_device
+            .Activate(CLSCTX_ALL, None)
             .map_err(|e| format!("Failed to get source volume interface: {:?}", e))?;
-        
+
         // 初始化渲染客户端（使用源设备格式确保一致性）
         let mut render_clients: HashMap<String, IAudioClient> = HashMap::new();
         let mut render_outputs: HashMap<String, IAudioRenderClient> = HashMap::new();
         let mut delay_buffers: HashMap<String, DelayBuffer> = HashMap::new();
-        
+
         for device_config in &config.devices {
             if !target_ids.contains(&device_config.id) || !device_config.enabled {
                 continue;
             }
-            
+
             let id = windows::core::HSTRING::from(device_config.id.as_str());
             if let Ok(device) = enumerator.GetDevice(&id) {
                 if let Ok(audio_client) = device.Activate::<IAudioClient>(CLSCTX_ALL, None) {
                     // 使用源设备格式初始化，确保音频质量一致
-                    if audio_client.Initialize(
-                        AUDCLNT_SHAREMODE_SHARED,
-                        AUDCLNT_STREAMFLAGS_NOPERSIST,
-                        10_000_000,
-                        0,
-                        format_ptr,
-                        None,
-                    ).is_ok() {
+                    if audio_client
+                        .Initialize(
+                            AUDCLNT_SHAREMODE_SHARED,
+                            AUDCLNT_STREAMFLAGS_NOPERSIST,
+                            10_000_000,
+                            0,
+                            format_ptr,
+                            None,
+                        )
+                        .is_ok()
+                    {
                         if let Ok(render_client) = audio_client.GetService::<IAudioRenderClient>() {
                             let _ = audio_client.Start();
                             render_clients.insert(device_config.id.clone(), audio_client);
                             render_outputs.insert(device_config.id.clone(), render_client);
                             delay_buffers.insert(
                                 device_config.id.clone(),
-                                DelayBuffer::new(device_config.delay_ms, sample_rate, channels as usize)
+                                DelayBuffer::new(
+                                    device_config.delay_ms,
+                                    sample_rate,
+                                    channels as usize,
+                                ),
                             );
                         }
                     }
                 }
             }
         }
-        
+
         while running.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_millis(1));
-            
+
             // 实时更新延迟设置
             if let Ok(delays) = shared_delays.lock() {
                 for (device_id, &delay_ms) in delays.iter() {
@@ -423,64 +454,67 @@ impl AudioRouter {
                     }
                 }
             }
-            
+
             // 获取源设备(VB-Cable)的系统音量
-            let system_volume: f32 = source_volume.GetMasterVolumeLevelScalar()
-                .unwrap_or(1.0);
-            
-            let packet_size = capture.GetNextPacketSize()
+            let system_volume: f32 = source_volume.GetMasterVolumeLevelScalar().unwrap_or(1.0);
+
+            let packet_size = capture
+                .GetNextPacketSize()
                 .map_err(|e| format!("GetNextPacketSize failed: {:?}", e))?;
             if packet_size == 0 {
                 continue;
             }
-            
+
             let mut data_ptr: *mut u8 = std::ptr::null_mut();
             let mut num_frames = 0u32;
             let mut flags = 0u32;
-            
-            capture.GetBuffer(&mut data_ptr, &mut num_frames, &mut flags, None, None)
+
+            capture
+                .GetBuffer(&mut data_ptr, &mut num_frames, &mut flags, None, None)
                 .map_err(|e| format!("GetBuffer failed: {:?}", e))?;
-            
+
             if num_frames == 0 || data_ptr.is_null() {
                 let _ = capture.ReleaseBuffer(num_frames);
                 continue;
             }
-            
+
             let data = std::slice::from_raw_parts(
                 data_ptr as *const f32,
-                (num_frames as usize) * channels as usize
+                (num_frames as usize) * channels as usize,
             );
-            
+
             // 推入延迟缓冲区（批量推入，减少内存分配）
             for buffer in delay_buffers.values_mut() {
                 buffer.push_slice(data);
             }
-            
+
             // 从延迟缓冲区读取并渲染
             for (device_id, render_client) in render_outputs.iter() {
                 if let Some(buffer) = delay_buffers.get_mut(device_id) {
                     // 实时获取应用层音量
-                    let app_volume = shared_volumes.lock()
+                    let app_volume = shared_volumes
+                        .lock()
                         .ok()
                         .and_then(|v| v.get(device_id).copied())
                         .unwrap_or(1.0);
-                    
+
                     // 总音量 = 系统音量 * 应用层音量 * 增益
                     // 增益 5.0 补偿 VB-Cable 捕获的音量损失
                     let total_volume = system_volume * app_volume * 2.5;
-                    
+
                     if let Ok(out_ptr) = render_client.GetBuffer(num_frames) {
                         if !out_ptr.is_null() {
                             // 直接写入输出缓冲区，避免中间分配
                             let out_slice = std::slice::from_raw_parts_mut(
                                 out_ptr as *mut f32,
-                                (num_frames as usize) * channels as usize
+                                (num_frames as usize) * channels as usize,
                             );
-                            
+
                             for frame in out_slice.chunks_mut(channels as usize) {
                                 let delayed_frame = buffer.pop_or_silent();
                                 for (j, sample) in frame.iter_mut().enumerate() {
-                                    *sample = delayed_frame.get(j).copied().unwrap_or(0.0) * total_volume;
+                                    *sample =
+                                        delayed_frame.get(j).copied().unwrap_or(0.0) * total_volume;
                                 }
                             }
                             let _ = render_client.ReleaseBuffer(num_frames, 0);
@@ -488,15 +522,15 @@ impl AudioRouter {
                     }
                 }
             }
-            
+
             let _ = capture.ReleaseBuffer(num_frames);
         }
-        
+
         // 停止所有渲染客户端
         for client in render_clients.values() {
             let _ = client.Stop();
         }
-        
+
         Ok(())
     }
 }

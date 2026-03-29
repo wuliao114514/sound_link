@@ -3,8 +3,10 @@
 mod devices;
 mod router;
 
-use devices::{Device, DeviceManager, AudioDeviceManager};
-use router::{AudioRouter, RouterConfig, RouterDevice, RouterStatus, ValidationResult, VirtualDeviceStatus};
+use devices::{AudioDeviceManager, Device, DeviceManager};
+use router::{
+    AudioRouter, RouterConfig, RouterDevice, RouterStatus, ValidationResult, VirtualDeviceStatus,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -14,7 +16,7 @@ use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager, WebviewWindow, Emitter,
+    Emitter, Manager, WebviewWindow,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -72,8 +74,7 @@ fn save_config(config: &AppConfig) -> Result<(), String> {
     let path = get_config_path();
     let content = serde_json::to_string_pretty(config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    fs::write(&path, content)
-        .map_err(|e| format!("Failed to write config: {}", e))
+    fs::write(&path, content).map_err(|e| format!("Failed to write config: {}", e))
 }
 
 fn load_saved_router_config() -> SavedRouterConfig {
@@ -92,8 +93,7 @@ fn save_router_config_file(config: &SavedRouterConfig) -> Result<(), String> {
     let path = get_router_config_path();
     let content = serde_json::to_string_pretty(config)
         .map_err(|e| format!("Failed to serialize router config: {}", e))?;
-    fs::write(&path, content)
-        .map_err(|e| format!("Failed to write router config: {}", e))
+    fs::write(&path, content).map_err(|e| format!("Failed to write router config: {}", e))
 }
 
 #[tauri::command]
@@ -117,32 +117,34 @@ fn set_default_device(device_id: String, state: tauri::State<AppState>) -> Resul
 /// 直接通过设备ID设置默认设备（不依赖 State）
 fn set_default_device_by_id(device_id: &str) -> Result<(), String> {
     use std::process::Command;
-    
+
     #[cfg(windows)]
     use std::os::windows::process::CommandExt;
-    
+
     #[cfg(windows)]
     const CREATE_NO_WINDOW: u32 = 0x08000000;
-    
+
     let mut cmd = Command::new("powershell");
     cmd.args([
         "-NoProfile",
-        "-ExecutionPolicy", "Bypass",
+        "-ExecutionPolicy",
+        "Bypass",
         "-Command",
-        &format!("Set-AudioDevice -Id '{}' -Default", device_id)
+        &format!("Set-AudioDevice -Id '{}' -Default", device_id),
     ]);
-    
+
     #[cfg(windows)]
     cmd.creation_flags(CREATE_NO_WINDOW);
-    
-    let output = cmd.output()
+
+    let output = cmd
+        .output()
         .map_err(|e| format!("Failed to execute command: {}", e))?;
-    
+
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Failed to set default device: {}", stderr));
     }
-    
+
     Ok(())
 }
 
@@ -170,7 +172,7 @@ fn get_initial_data(state: tauri::State<AppState>) -> InitialData {
     let config = state.config.lock().unwrap().clone();
     let router = state.router.lock().unwrap();
     let virtual_device = router.get_virtual_device_status();
-    
+
     InitialData {
         devices,
         default_device_id,
@@ -193,7 +195,7 @@ fn refresh_and_cache(state: tauri::State<AppState>) -> InitialData {
     let config = state.config.lock().unwrap().clone();
     let router = state.router.lock().unwrap();
     let virtual_device = router.get_virtual_device_status();
-    
+
     let data = InitialData {
         devices,
         default_device_id,
@@ -201,7 +203,7 @@ fn refresh_and_cache(state: tauri::State<AppState>) -> InitialData {
         timestamp: get_current_timestamp(),
         virtual_device,
     };
-    
+
     *state.cached_data.lock().unwrap() = Some(data.clone());
     data
 }
@@ -235,21 +237,21 @@ fn set_config(
 #[tauri::command]
 #[cfg(target_os = "windows")]
 fn get_system_accent_color() -> Option<String> {
-    use winreg::RegKey;
     use winreg::enums::*;
-    
+    use winreg::RegKey;
+
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu
         .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent")
         .ok()?;
-    
+
     let accent: u32 = key.get_value("AccentColorMenu").ok()?;
-    
+
     let _a = ((accent >> 24) & 0xFF) as u8;
     let b = ((accent >> 16) & 0xFF) as u8;
     let g = ((accent >> 8) & 0xFF) as u8;
     let r = (accent & 0xFF) as u8;
-    
+
     Some(format!("#{:02X}{:02X}{:02X}", r, g, b))
 }
 
@@ -262,16 +264,16 @@ fn get_system_accent_color() -> Option<String> {
 #[tauri::command]
 #[cfg(target_os = "windows")]
 fn get_system_theme() -> Option<bool> {
-    use winreg::RegKey;
     use winreg::enums::*;
-    
+    use winreg::RegKey;
+
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let key = hkcu
         .open_subkey(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize")
         .ok()?;
-    
+
     let use_light_theme: u32 = key.get_value("SystemUsesLightTheme").ok()?;
-    
+
     Some(use_light_theme == 0)
 }
 
@@ -303,21 +305,32 @@ fn get_router_status(state: tauri::State<AppState>) -> RouterStatus {
 }
 
 #[tauri::command]
-fn set_router_device_volume(device_id: String, volume: f32, state: tauri::State<AppState>) -> Result<(), String> {
+fn set_router_device_volume(
+    device_id: String,
+    volume: f32,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
     let mut router = state.router.lock().unwrap();
     router.set_device_volume(&device_id, volume);
     Ok(())
 }
 
 #[tauri::command]
-fn set_router_device_delay(device_id: String, delay_ms: u32, state: tauri::State<AppState>) -> Result<(), String> {
+fn set_router_device_delay(
+    device_id: String,
+    delay_ms: u32,
+    state: tauri::State<AppState>,
+) -> Result<(), String> {
     let mut router = state.router.lock().unwrap();
     router.set_device_delay(&device_id, delay_ms);
     Ok(())
 }
 
 #[tauri::command]
-fn validate_routing_targets(device_ids: Vec<String>, state: tauri::State<AppState>) -> ValidationResult {
+fn validate_routing_targets(
+    device_ids: Vec<String>,
+    state: tauri::State<AppState>,
+) -> ValidationResult {
     let router = state.router.lock().unwrap();
     router.validate_targets(&device_ids)
 }
@@ -362,35 +375,35 @@ fn show_window(window: &WebviewWindow) {
                     let window_width = 300;
                     let window_height = 280;
                     let margin = 210;
-                    
+
                     let tray_pos: tauri::PhysicalPosition<i32> = rect.position.to_physical(1.0);
                     let tray_size: tauri::PhysicalSize<i32> = rect.size.to_physical(1.0);
-                    
+
                     let tray_x = tray_pos.x;
                     let tray_y = tray_pos.y;
                     let tray_h = tray_size.height;
-                    
+
                     let mut x = tray_x;
                     let mut y = tray_y + tray_h - 5;
-                    
+
                     if let Some(monitor) = window.current_monitor().ok().flatten() {
                         let work_area = monitor.work_area();
                         let work_x = work_area.position.x;
                         let work_y = work_area.position.y;
                         let work_right = work_x + work_area.size.width as i32;
                         let work_bottom = work_y + work_area.size.height as i32;
-                        
+
                         if y + window_height > work_bottom {
                             y = tray_y - window_height - margin;
                         }
-                        
+
                         if x + window_width > work_right {
                             x = work_right - window_width - margin;
                         }
                         if x < work_x {
                             x = work_x + margin;
                         }
-                        
+
                         if y < work_y {
                             y = work_y + margin;
                         }
@@ -398,11 +411,12 @@ fn show_window(window: &WebviewWindow) {
                             y = work_bottom - window_height - margin;
                         }
                     }
-                    
-                    let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+
+                    let _ = window
+                        .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
                 }
             }
-            
+
             let _ = window.show();
             let _ = window.set_focus();
             let _ = window.emit("refresh-devices", ());
@@ -414,41 +428,41 @@ fn show_window(window: &WebviewWindow) {
 fn show_settings_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.emit("show-settings", ());
-        
+
         if let Some(tray) = app.tray_by_id("main") {
             if let Ok(Some(rect)) = tray.rect() {
                 let window_width = 300;
                 let window_height = 280;
                 let margin = 210;
-                
+
                 let tray_pos: tauri::PhysicalPosition<i32> = rect.position.to_physical(1.0);
                 let tray_size: tauri::PhysicalSize<i32> = rect.size.to_physical(1.0);
-                
+
                 let tray_x = tray_pos.x;
                 let tray_y = tray_pos.y;
                 let tray_h = tray_size.height;
-                
+
                 let mut x = tray_x;
                 let mut y = tray_y + tray_h - 5;
-                
+
                 if let Some(monitor) = window.current_monitor().ok().flatten() {
                     let work_area = monitor.work_area();
                     let work_x = work_area.position.x;
                     let work_y = work_area.position.y;
                     let work_right = work_x + work_area.size.width as i32;
                     let work_bottom = work_y + work_area.size.height as i32;
-                    
+
                     if y + window_height > work_bottom {
                         y = tray_y - window_height - margin;
                     }
-                    
+
                     if x + window_width > work_right {
                         x = work_right - window_width - margin;
                     }
                     if x < work_x {
                         x = work_x + margin;
                     }
-                    
+
                     if y < work_y {
                         y = work_y + margin;
                     }
@@ -456,11 +470,12 @@ fn show_settings_window(app: &tauri::AppHandle) {
                         y = work_bottom - window_height - margin;
                     }
                 }
-                
-                let _ = window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+
+                let _ = window
+                    .set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
             }
         }
-        
+
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -470,20 +485,18 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
     let settings = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&settings, &quit])?;
-    
+
     let is_dark = get_system_theme().unwrap_or(false);
     let icon = create_tray_icon(is_dark);
-    
+
     let _tray = TrayIconBuilder::with_id("main")
         .icon(icon)
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| {
-            match event.id.as_ref() {
-                "settings" => show_settings_window(app),
-                "quit" => app.exit(0),
-                _ => {}
-            }
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "settings" => show_settings_window(app),
+            "quit" => app.exit(0),
+            _ => {}
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click {
@@ -498,7 +511,7 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
             }
         })
         .build(app)?;
-    
+
     Ok(())
 }
 
@@ -521,7 +534,7 @@ fn load_icon_from_bytes(bytes: &[u8]) -> Image<'static> {
 
 fn main() {
     let config = load_config();
-    
+
     tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .manage(AppState {
@@ -556,14 +569,14 @@ fn main() {
         ])
         .setup(|app| {
             setup_tray(app.handle())?;
-            
+
             if let Some(window) = app.get_webview_window("main") {
                 #[cfg(target_os = "windows")]
                 {
                     let _ = window.set_shadow(true);
                 }
             }
-            
+
             Ok(())
         })
         .on_window_event(|window, event| {

@@ -1,6 +1,6 @@
 mod delay_buffer;
-mod volume_mixer;
 mod router;
+mod volume_mixer;
 
 pub use router::AudioRouter;
 
