@@ -505,7 +505,7 @@ impl AudioRouter {
 
                     // 总音量 = 系统音量 * 应用层音量 * 增益
                     // 增益 7.0 补偿 VB-Cable 捕获的音量损失
-                    let total_volume = system_volume * app_volume * 7.0;
+                    let total_volume = system_volume * app_volume * 7.3;
 
                     if let Ok(out_ptr) = render_client.GetBuffer(num_frames) {
                         if !out_ptr.is_null() {
