@@ -36,6 +36,10 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
+    "publisher": "CmzYa",
+    "longDescription": "可视化音频设备切换与路由工具",
+    "shortDescription": "音频设备管理工具",
+    "copyright": "Copyright (c) 2026 CmzYa",
     "windows": {
       "nsis": {
         "installMode": "currentUser",

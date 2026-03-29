@@ -17,7 +17,6 @@ const CACHE_EXPIRE_SECONDS = 30;
 
 const allDevices = shallowRef([]);
 const activeDeviceId = ref(null);
-const configDefaultDeviceId = ref(null);
 const showSettings = ref(false);
 const advancedMaterial = ref(false);
 const isReady = ref(false);
@@ -45,14 +44,13 @@ function handleSettingsClose() {
 }
 
 function handleDeviceSettingsChanged(settings) {
-  // 同步设备设置到主界面
-  deviceVolumes.value[settings.deviceId] = settings.volume;
-  deviceDelays.value[settings.deviceId] = settings.delayMs;
+  // 同步设备设置到主界面，确保响应式更新
+  deviceVolumes.value = { ...deviceVolumes.value, [settings.deviceId]: settings.volume };
+  deviceDelays.value = { ...deviceDelays.value, [settings.deviceId]: settings.delayMs };
 }
 
 const devices = computed(() => {
   return allDevices.value.filter(d => 
-    d.id !== configDefaultDeviceId.value && 
     !d.name.toLowerCase().includes('cable')
   );
 });
@@ -83,17 +81,10 @@ const devicePositions = computed(() => {
 
 function applyData(data) {
   allDevices.value = data.devices;
-  activeDeviceId.value = data.default_device_id;
-  configDefaultDeviceId.value = data.config.default_device_id;
   advancedMaterial.value = data.config.advanced_material || false;
   
-  // 加载虚拟设备状态
   if (data.virtual_device) {
     virtualDeviceStatus.value = data.virtual_device;
-  }
-  
-  if (activeDeviceId.value === configDefaultDeviceId.value) {
-    activeDeviceId.value = null;
   }
 }
 
@@ -177,16 +168,8 @@ async function handleDeviceClick(device) {
   switchingDeviceId.value = device.id;
   
   try {
-    if (device.id === activeDeviceId.value) {
-      if (!configDefaultDeviceId.value) {
-        return;
-      }
-      activeDeviceId.value = null;
-      await invoke("set_default_device", { deviceId: configDefaultDeviceId.value });
-    } else {
-      activeDeviceId.value = device.id;
-      await invoke("set_default_device", { deviceId: device.id });
-    }
+    activeDeviceId.value = device.id;
+    await invoke("set_default_device", { deviceId: device.id });
   } catch (e) {
     console.error("Failed to set device:", e);
     activeDeviceId.value = previousDeviceId;
@@ -211,24 +194,6 @@ async function handleCenterBallClick() {
   if (isRouterMode.value) {
     // 路由模式：切换广播开启/关闭
     await toggleRouting();
-  } else {
-    // 管理模式：设置默认设备
-    if (!configDefaultDeviceId.value) return;
-    
-    switchingDeviceId.value = "center";
-    try {
-      if (activeDeviceId.value === configDefaultDeviceId.value) {
-        // 当前是默认设备，不做操作或提示
-      } else {
-        // 切换回默认设备
-        activeDeviceId.value = null;
-        await invoke("set_default_device", { deviceId: configDefaultDeviceId.value });
-      }
-    } catch (e) {
-      console.error("Failed to set default device:", e);
-    } finally {
-      switchingDeviceId.value = null;
-    }
   }
 }
 
@@ -555,7 +520,6 @@ onUnmounted(() => {
       v-if="showSettings" 
       :app-version="appVersion"
       :initial-devices="allDevices"
-      :initial-default-device-id="configDefaultDeviceId"
       :initial-advanced-material="advancedMaterial"
       :has-update="hasUpdate"
       :latest-version="latestVersion"

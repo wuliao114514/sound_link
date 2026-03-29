@@ -2,7 +2,7 @@
 import { ref, onMounted, watch, computed } from "vue";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-shell";
-import { Speaker, Headphones, Monitor, Bluetooth, Volume2, ArrowLeft, ChevronDown, ChevronUp, RefreshCw } from "lucide-vue-next";
+import { Speaker, Headphones, Monitor, Bluetooth, Volume2, ArrowLeft, RefreshCw } from "lucide-vue-next";
 
 const props = defineProps({
   appVersion: {
@@ -12,10 +12,6 @@ const props = defineProps({
   initialDevices: {
     type: Array,
     default: () => []
-  },
-  initialDefaultDeviceId: {
-    type: String,
-    default: null
   },
   initialAdvancedMaterial: {
     type: Boolean,
@@ -34,10 +30,8 @@ const props = defineProps({
 const emit = defineEmits(["close", "config-changed", "device-settings-changed"]);
 
 const devices = ref([]);
-const selectedDeviceId = ref(null);
-const savedDeviceId = ref(null);
-const isDropdownOpen = ref(false);
 const advancedMaterial = ref(false);
+const autoStart = ref(false);
 const isCheckingUpdate = ref(false);
 const updateInfo = ref(null);
 const isInitialized = ref(false);
@@ -48,10 +42,6 @@ const deviceDelays = ref({});
 
 const GITHUB_REPO = "CmzYa/sound_link";
 const GITHUB_RELEASES_URL = `https://github.com/${GITHUB_REPO}/releases/latest`;
-
-const selectedDevice = computed(() => {
-  return devices.value.find(d => d.id === selectedDeviceId.value);
-});
 
 // 过滤掉 Cable 设备
 const availableDevices = computed(() => {
@@ -79,8 +69,6 @@ async function loadDevices() {
 async function loadConfig() {
   try {
     const config = await invoke("get_config");
-    savedDeviceId.value = config.default_device_id || null;
-    selectedDeviceId.value = savedDeviceId.value;
     advancedMaterial.value = config.advanced_material || false;
   } catch (e) {
     console.error("Failed to load config:", e);
@@ -90,10 +78,9 @@ async function loadConfig() {
 async function saveConfig() {
   try {
     await invoke("set_config", { 
-      deviceId: selectedDeviceId.value ?? "",
-      advancedMaterial: advancedMaterial.value 
+      advancedMaterial: advancedMaterial.value,
+      autoStart: autoStart.value
     });
-    savedDeviceId.value = selectedDeviceId.value;
   } catch (e) {
     console.error("Failed to save config:", e);
   }
@@ -130,47 +117,33 @@ async function saveDeviceSettings() {
   }
 }
 
-function selectDevice(deviceId) {
-  selectedDeviceId.value = deviceId;
-  isDropdownOpen.value = false;
-}
-
-function clearSelection() {
-  selectedDeviceId.value = null;
-  isDropdownOpen.value = false;
-}
-
 async function updateDeviceVolume(deviceId, volume) {
-  deviceVolumes.value[deviceId] = volume;
+  deviceVolumes.value = { ...deviceVolumes.value, [deviceId]: volume };
   await saveDeviceSettings();
   emit("device-settings-changed", { deviceId, volume, delayMs: deviceDelays.value[deviceId] });
-  // 如果正在广播，实时更新
   try {
     await invoke("set_router_device_volume", { deviceId, volume });
   } catch (e) {
-    // 忽略错误（可能未在广播）
   }
 }
 
 async function updateDeviceDelay(deviceId, delayMs) {
-  deviceDelays.value[deviceId] = delayMs;
+  deviceDelays.value = { ...deviceDelays.value, [deviceId]: delayMs };
   await saveDeviceSettings();
   emit("device-settings-changed", { deviceId, volume: deviceVolumes.value[deviceId], delayMs });
-  // 如果正在广播，实时更新
   try {
     await invoke("set_router_device_delay", { deviceId, delayMs });
   } catch (e) {
-    // 忽略错误（可能未在广播）
   }
 }
 
-watch(selectedDeviceId, () => {
+watch(advancedMaterial, () => {
   if (!isInitialized.value) return;
   saveConfig();
   emit("config-changed");
 });
 
-watch(advancedMaterial, () => {
+watch(autoStart, () => {
   if (!isInitialized.value) return;
   saveConfig();
   emit("config-changed");
@@ -246,9 +219,13 @@ onMounted(async () => {
     await loadDevices();
   }
   
-  savedDeviceId.value = props.initialDefaultDeviceId;
-  selectedDeviceId.value = props.initialDefaultDeviceId;
   advancedMaterial.value = props.initialAdvancedMaterial;
+  
+  try {
+    autoStart.value = await invoke("get_auto_start_status");
+  } catch (e) {
+    console.error("Failed to load auto start status:", e);
+  }
   
   if (props.hasUpdate && props.latestVersion) {
     updateInfo.value = {
@@ -273,49 +250,6 @@ onMounted(async () => {
     </div>
     
     <div class="settings-scroll">
-      <div class="setting-item">
-        <div class="setting-label">默认设备</div>
-        <p class="setting-hint">无连接时使用并在主窗口隐藏</p>
-        
-        <div class="dropdown">
-          <div class="dropdown-trigger" @click="isDropdownOpen = !isDropdownOpen">
-            <div class="dropdown-value">
-              <template v-if="selectedDevice">
-                <component :is="getDeviceIcon(selectedDevice.type)" :size="14" class="dropdown-icon" />
-                <span>{{ selectedDevice.name }}</span>
-              </template>
-              <span v-else class="placeholder">未选择</span>
-            </div>
-            <ChevronDown v-if="!isDropdownOpen" :size="16" class="chevron" />
-            <ChevronUp v-else :size="16" class="chevron" />
-          </div>
-          
-          <div v-if="isDropdownOpen" class="dropdown-menu">
-            <div
-              class="dropdown-item"
-              :class="{ selected: selectedDeviceId === null }"
-              @click="clearSelection"
-            >
-              <span class="placeholder">未选择</span>
-              <div v-if="selectedDeviceId === null" class="check">✓</div>
-            </div>
-            <div
-              v-for="device in devices"
-              :key="device.id"
-              class="dropdown-item"
-              :class="{ selected: selectedDeviceId === device.id }"
-              @click="selectDevice(device.id)"
-            >
-              <div class="item-content">
-                <component :is="getDeviceIcon(device.type)" :size="14" class="dropdown-icon" />
-                <span>{{ device.name }}</span>
-              </div>
-              <div v-if="selectedDeviceId === device.id" class="check">✓</div>
-            </div>
-          </div>
-        </div>
-      </div>
-      
       <div class="setting-item">
         <div class="setting-label">设备音量与延迟</div>
         <p class="setting-hint">设置广播时各设备的音量和延迟</p>
@@ -374,6 +308,22 @@ onMounted(async () => {
             <div class="toggle-thumb"></div>
           </div>
           <span class="toggle-label">{{ advancedMaterial ? '已开启' : '已关闭' }}</span>
+        </div>
+      </div>
+      
+      <div class="setting-item">
+        <div class="setting-label">开机自启动</div>
+        <p class="setting-hint">系统启动时自动运行应用</p>
+        
+        <div class="toggle-container">
+          <div 
+            class="toggle-switch" 
+            :class="{ active: autoStart }"
+            @click="autoStart = !autoStart"
+          >
+            <div class="toggle-thumb"></div>
+          </div>
+          <span class="toggle-label">{{ autoStart ? '已开启' : '已关闭' }}</span>
         </div>
       </div>
     </div>
@@ -472,93 +422,6 @@ h2 {
   color: var(--text-secondary);
   margin: 0 0 6px 0;
   line-height: 1.4;
-}
-
-.dropdown {
-  position: relative;
-}
-
-.dropdown-trigger {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.dropdown-trigger:hover {
-  border-color: var(--theme-color);
-}
-
-.dropdown-value {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-color);
-}
-
-.dropdown-icon {
-  color: var(--theme-color);
-  flex-shrink: 0;
-}
-
-.placeholder {
-  color: var(--text-secondary);
-}
-
-.chevron {
-  color: var(--text-secondary);
-  flex-shrink: 0;
-}
-
-.dropdown-menu {
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  right: 0;
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  border-radius: 8px;
-  max-height: 140px;
-  overflow-y: auto;
-  z-index: 10;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
-}
-
-.dropdown-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.dropdown-item:hover {
-  background: color-mix(in srgb, var(--theme-color) 10%, transparent);
-}
-
-.dropdown-item.selected {
-  background: color-mix(in srgb, var(--theme-color) 15%, transparent);
-}
-
-.item-content {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-color);
-}
-
-.check {
-  color: var(--theme-color);
-  font-size: 12px;
-  font-weight: bold;
 }
 
 .device-list {

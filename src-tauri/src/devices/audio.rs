@@ -104,57 +104,6 @@ impl DeviceManager for AudioDeviceManager {
 
         devices
     }
-
-    fn get_default(&self) -> Option<String> {
-        let mut cmd = Command::new("powershell");
-        cmd.args([
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-Command",
-            "chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; (Get-AudioDevice -Playback).Id"
-        ]);
-
-        #[cfg(windows)]
-        cmd.creation_flags(CREATE_NO_WINDOW);
-
-        let output = cmd.output().ok()?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let id = stdout.trim().to_string();
-        if id.is_empty() {
-            None
-        } else {
-            Some(id)
-        }
-    }
-
-    fn set_default(&self, device_id: &str) -> Result<(), String> {
-        if device_id.is_empty() {
-            return Ok(());
-        }
-
-        let mut cmd = Command::new("powershell");
-        cmd.args([
-            "-NoProfile",
-            "-ExecutionPolicy", "Bypass",
-            "-Command",
-            &format!("chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Set-AudioDevice -Id '{}' -Default", device_id)
-        ]);
-
-        #[cfg(windows)]
-        cmd.creation_flags(CREATE_NO_WINDOW);
-
-        let output = cmd
-            .output()
-            .map_err(|e| format!("Failed to execute command: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("Failed to set device: {}", stderr));
-        }
-
-        Ok(())
-    }
 }
 
 fn parse_device_info(id: &str, raw_name: &str) -> (String, String) {

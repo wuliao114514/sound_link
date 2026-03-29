@@ -7,6 +7,7 @@ use devices::{AudioDeviceManager, Device, DeviceManager};
 use router::{
     AudioRouter, RouterConfig, RouterDevice, RouterStatus, ValidationResult, VirtualDeviceStatus,
 };
+use auto_launch::AutoLaunchBuilder;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -21,9 +22,10 @@ use tauri::{
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 struct AppConfig {
-    default_device_id: Option<String>,
     #[serde(default)]
     advanced_material: bool,
+    #[serde(default)]
+    auto_start: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -103,19 +105,7 @@ fn get_audio_devices(state: tauri::State<AppState>) -> Vec<Device> {
 }
 
 #[tauri::command]
-fn get_default_device(state: tauri::State<AppState>) -> Option<String> {
-    let manager = state.audio_manager.lock().unwrap();
-    manager.get_default()
-}
-
-#[tauri::command]
-fn set_default_device(device_id: String, state: tauri::State<AppState>) -> Result<(), String> {
-    let manager = state.audio_manager.lock().unwrap();
-    manager.set_default(&device_id)
-}
-
-/// 直接通过设备ID设置默认设备（不依赖 State）
-fn set_default_device_by_id(device_id: &str) -> Result<(), String> {
+fn set_default_device(device_id: String) -> Result<(), String> {
     use std::process::Command;
 
     #[cfg(windows)]
@@ -151,7 +141,6 @@ fn set_default_device_by_id(device_id: &str) -> Result<(), String> {
 #[derive(Serialize, Clone)]
 struct InitialData {
     devices: Vec<Device>,
-    default_device_id: Option<String>,
     config: AppConfig,
     timestamp: u64,
     virtual_device: VirtualDeviceStatus,
@@ -168,14 +157,12 @@ fn get_current_timestamp() -> u64 {
 fn get_initial_data(state: tauri::State<AppState>) -> InitialData {
     let manager = state.audio_manager.lock().unwrap();
     let devices = manager.get_devices();
-    let default_device_id = manager.get_default();
     let config = state.config.lock().unwrap().clone();
     let router = state.router.lock().unwrap();
     let virtual_device = router.get_virtual_device_status();
 
     InitialData {
         devices,
-        default_device_id,
         config,
         timestamp: get_current_timestamp(),
         virtual_device,
@@ -191,14 +178,12 @@ fn get_cached_data(state: tauri::State<AppState>) -> Option<InitialData> {
 fn refresh_and_cache(state: tauri::State<AppState>) -> InitialData {
     let manager = state.audio_manager.lock().unwrap();
     let devices = manager.get_devices();
-    let default_device_id = manager.get_default();
     let config = state.config.lock().unwrap().clone();
     let router = state.router.lock().unwrap();
     let virtual_device = router.get_virtual_device_status();
 
     let data = InitialData {
         devices,
-        default_device_id,
         config,
         timestamp: get_current_timestamp(),
         virtual_device,
@@ -220,16 +205,29 @@ fn get_config(state: tauri::State<AppState>) -> AppConfig {
 
 #[tauri::command]
 fn set_config(
-    device_id: Option<String>,
     advanced_material: Option<bool>,
+    auto_start: Option<bool>,
     state: tauri::State<AppState>,
 ) -> Result<(), String> {
     let mut config = state.config.lock().unwrap();
-    if let Some(id) = device_id {
-        config.default_device_id = if id.is_empty() { None } else { Some(id) };
-    }
     if let Some(material) = advanced_material {
         config.advanced_material = material;
+    }
+    if let Some(start) = auto_start {
+        if config.auto_start != start {
+            let app_name = "Sound Link";
+            let auto = AutoLaunchBuilder::new()
+                .set_app_name(app_name)
+                .build()
+                .map_err(|e| format!("Failed to create auto launch: {}", e))?;
+            
+            if start {
+                auto.enable().map_err(|e| format!("Failed to enable auto start: {}", e))?;
+            } else {
+                auto.disable().map_err(|e| format!("Failed to disable auto start: {}", e))?;
+            }
+            config.auto_start = start;
+        }
     }
     save_config(&config)
 }
@@ -357,6 +355,28 @@ fn get_virtual_device_status(state: tauri::State<AppState>) -> VirtualDeviceStat
 #[tauri::command]
 fn get_saved_router_config() -> SavedRouterConfig {
     load_saved_router_config()
+}
+
+#[tauri::command]
+fn get_auto_start_status(state: tauri::State<AppState>) -> bool {
+    let config = state.config.lock().unwrap();
+    let app_name = "Sound Link";
+    
+    if let Ok(auto) = AutoLaunchBuilder::new()
+        .set_app_name(app_name)
+        .build()
+    {
+        let is_enabled = auto.is_enabled().unwrap_or(false);
+        if is_enabled != config.auto_start {
+            drop(config);
+            let mut config = state.config.lock().unwrap();
+            config.auto_start = is_enabled;
+            let _ = save_config(&config);
+            return is_enabled;
+        }
+        return config.auto_start;
+    }
+    config.auto_start
 }
 
 #[tauri::command]
@@ -548,7 +568,6 @@ fn main() {
             get_cached_data,
             refresh_and_cache,
             get_audio_devices,
-            get_default_device,
             set_default_device,
             hide_window,
             get_config,
@@ -566,6 +585,7 @@ fn main() {
             get_virtual_device_status,
             get_saved_router_config,
             save_router_config,
+            get_auto_start_status,
         ])
         .setup(|app| {
             setup_tray(app.handle())?;
@@ -581,18 +601,11 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { .. } = event {
-                // 退出时停止路由并恢复原设备
                 let app = window.app_handle();
                 if let Some(state) = app.try_state::<AppState>() {
                     if let Ok(mut router) = state.router.lock() {
                         if router.is_running() {
                             router.stop();
-                        }
-                    }
-                    // 恢复到用户设置的默认设备
-                    if let Ok(config) = state.config.lock() {
-                        if let Some(ref device_id) = config.default_device_id {
-                            let _ = set_default_device_by_id(device_id);
                         }
                     }
                 }
